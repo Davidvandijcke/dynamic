@@ -1,0 +1,11 @@
+— start —
+
+#To install this you need On Windows a current installation ofRtools, on OS X you need to install Xcode.
+
+devtools::install_github("sjewo/readstata13", ref="testing")
+
+library(readstata13)
+dat <- read.dta13("file.dta")
+save.dta13(dat, file="newfile.dta")
+
+— end —

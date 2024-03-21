@@ -1,0 +1,2162 @@
+#*************************************************************************************************
+#### LOAD MASTER DATA ####
+#*************************************************************************************************
+
+# read data
+geo_adj <- fread(file.path(dataBy, 'geo_stacked_long.csv.gz'))
+
+geo_adj[, ds := fastDate(ds)]
+
+geo_adj[, destination_cbg := padCbg(destination_cbg)]
+geo_adj[, origin_cbg := padCbg(origin_cbg)]
+
+
+# add in destination cbg lat long
+cbg_geo <- fread(file.path(dataIn, 'safegraph_open_census', 'metadata', 'cbg_geographic_data.csv'),
+                 select = c("census_block_group", "latitude", "longitude"))
+
+names(cbg_geo) <- c("destination_cbg", "destination_lat", "destination_long")
+cbg_geo[, destination_cbg := padCbg(destination_cbg)]
+geo_adj <- cbg_geo[geo_adj, on = "destination_cbg"]
+
+# add in origin cbg lat long
+names(cbg_geo) <- c("origin_cbg", "origin_lat", "origin_long")
+geo_adj <- cbg_geo[geo_adj, on = "origin_cbg"]
+
+
+
+
+
+
+#**************************************************************************************
+#### SUMMARY STATISTICS ####
+#**************************************************************************************
+
+geo_cross <- fread(file.path(dataOut, 'cross_regression.csv'))
+
+geo_cross[, distTo_ProudBoys := distTo_ProudBoys / 1000 ]
+#geo_cross[, distTo_floyd := distTo_floyd / 1000 ]
+
+geo_cross[, `Protester (=1)` := as.numeric(num_devices_adj > 0)]
+geo_cross[, `Island` := as.numeric(trump_neighbor < trump_share_votes)]
+
+vars_select <- c("num_devices_adj", "Protester (=1)", "distTo_ProudBoys",  "parler_count", "Island", 
+                 "trump_neighbor", "trump_share_votes",
+                 "edu_highschool", "male", "median_hh_inc",  "pop", 
+                 "publicAssistance",
+                 "race_w", "race_b", "race_h", 
+                 "unemployed")
+geo_cross <- geo_cross[,..vars_select]
+
+colnames(geo_cross) <- c( "Protester count (est.)", "Protester (=1)", "Distance to Proud Boys (Km)", 
+                          'Parler count',"Island", "Trump neighbor share", 
+                          "Trump vote share",  "Education: high school", "Male",
+                          "Median household income",
+                          "Population", "Public assistance", 
+                          "Race: white", "Race: black", "Race: hispanic", 
+                          "Unemployed")
+res <- stargazer(geo_cross, title = "Summary Statistics", font.size = "scriptsize",
+                 column.sep.width = "0.1pt", float = FALSE) # produce summary stats
+
+cat(res, file = file.path(tabs, 'sstats.tex'), sep = "\n")
+
+
+
+
+
+
+
+
+
+#******************************************************************************
+####***********************************************************************####
+#### FIGURES ####
+####***********************************************************************####
+#******************************************************************************
+
+
+
+#*************************************************************************************************
+#### PROTEST LOCATIONS ####
+#*************************************************************************************************
+
+## get DC map and CBG shapefile
+dc_rgdal <- rgdal::readOGR(dsn = file.path(dataIn, "DC_cbg_shapefile"), layer = 'tl_2019_11_bg')
+dc_rgdal <- spTransform(dc_rgdal, CRS("+proj=longlat +datum=WGS84"))
+dc_cbg <- fortify(dc_rgdal)
+
+dc_cbg <- merge(dc_cbg, as.data.frame(dc_rgdal), by.x = "id", by.y = 0)
+
+dc_cbg$destination_cbg <- padCbg(dc_cbg$GEOID)
+
+
+
+# get google map of DC (centered on Capitol's lat-long)
+dc_map <- ggmap(ggmap::get_googlemap(center = c(lon = -77.009056, lat = 38.889805),
+                                     maptype = 'terrain', zoom = 12, scale = 2, color = 'color'))
+
+which_protest <- "2021-01-06"
+
+
+# output cbg protest locations for list of protest dates
+protests_list <- c("2021-01-06")
+protestCbgs <- data.table(date = character(), protest_cbg = character()) # pre-create empty data table
+
+
+## get parler data
+parler <- fread(file.path(dataIn, 'parler', 'parler-videos-geocoded-cbg.csv.gz'))
+parler[,ds := as.Date(Timestamp)]
+
+parler <- parler[ds == as.Date("2021-01-06")]
+parler <- parler[Longitude %between% c(-162,69) & Latitude %between% c(19,65)]
+
+
+
+for (which_protest in protests_list) {
+  
+  geo_dest <- geo_adj[ds == which_protest]
+  geo_dest <- geo_dest[,lapply(.SD, mean, na.rm = TRUE), by = c("destination_cbg"), .SDcols = "surge_perc"]
+
+
+  # overlay cbg shapefile and plot map: lower threshold and zoom on capitol
+  # get google map of DC (centered on Capitol's lat-long)
+  thresh <- 417
+  geo_dest[,surge_perc_above := surge_perc > thresh]
+  mapit <- plyr::join(dc_cbg, geo_dest)
+
+  p <- dc_map + geom_polygon(aes(x=long, y=lat, group=group, fill = surge_perc_above),
+                             size=.2,color=t_col("gray50", 50), data=mapit, alpha=0) +
+    geom_polygon(aes(x=long, y=lat,group = group, fill = surge_perc_above),
+                 size=.2, data=mapit, alpha=0.5) +
+    geom_point(aes(x = Longitude, y = Latitude), data = parler, color = "cyan", size = 0.2, shape = 20) + 
+    scale_fill_manual(values = c("NA", t_col("coral1", 90)), aesthetics = "fill") +
+    theme(legend.position = "none", axis.text = element_text(size = 6),
+          text = element_text(family = 'LM Roman 10')) + xlab("") + ylab("")
+
+  ggsave(file.path(figs, paste0('cbgProtests_', which_protest, '.pdf')), height = 6, width = 6, device=cairo_pdf)
+  
+  
+  # export protest cbgs to file
+  cbgs <- geo_dest[surge_perc_above == TRUE]$destination_cbg
+  protestCbgs <- rbind(protestCbgs, data.table(date = as.character(rep(which_protest, length(cbgs))), 
+                                               protest_cbg = cbgs))
+}
+
+
+
+# write identified cbgs to file
+fwrite(protestCbgs, file.path(dataOut, 'protestCbgs.csv'))
+
+
+
+
+#*****************************************************************
+##### FREQUENCY WITH WHICH ORIGIN CBG VISITS ####
+#*****************************************************************
+
+# define reference period
+reference_start <- "2020-12-01"
+reference_end <- "2021-01-03"
+
+# keep only origin CBGs that travelled to Jan 6 protest CBGS 
+geo_freq <- geo_adj[destination_cbg %in% '110010062021'] # only capitol cbg
+geo_freq <- geo_freq[ds >= as.Date(reference_start)]
+
+# calculate average number of visitors from these cbgs in months prior
+period <- seq.Date(as.Date(reference_start), as.Date(reference_end), by = "day")
+period <- setdiff(as.character(period), c("2020-10-03", "2020-11-03", "2020-11-14", "2020-12-12"))
+geo_freq <- geo_freq[, origin_cbg_freq := num_devices_adj, by = "ds"]
+temp <- geo_freq[ds %in% as.Date(period),  .(avg_freq = sum(origin_cbg_freq)), by = "origin_cbg"]
+geo_freq <- temp[geo_freq, on = "origin_cbg"]
+geo_freq[, cbgCount := .N, by = "origin_cbg"]
+geo_freq[, avg_freq := avg_freq / cbgCount]
+
+
+
+
+# calculate percentage surge wrt conditional average number of visitors from cbg 
+geo_freq[, surge_origin := 100*(num_devices_adj - avg_freq) / avg_freq ]
+
+fwrite(geo_freq[,c("avg_freq", "surge_origin", "origin_cbg", "destination_cbg", "ds")], file.path(dataBy, 'surge_origin.csv.gz')) # for use in other parts of analysis
+
+
+for (i in 1:2) { 
+  
+  if (i == 1) {
+    temp <- geo_freq[ds == as.Date("2021-01-06")]
+    maxSurge <- max(temp$surge_origin, na.rm = TRUE)
+  } else {
+    temp <- geo_freq[ds %in% as.Date(period)] #[, surge_origin := mean(surge_origin, na.rm = TRUE), by = "origin_cbg"]
+  }
+  
+  # estimate gaussian mixture and plot densities
+  surge_origin <- temp[!is.na(surge_origin) & surge_origin < 400]$surge_origin
+  mb.density <- densityMclust(surge_origin, modelNames = "V")
+  x <- seq(min(surge_origin)-diff(range(surge_origin))/10, max(surge_origin) + diff(range(surge_origin))/10, length = 200)
+  cdens <- predict(mb.density, x, what = "cdens")
+  if (i == 1) {
+    cdens <-  t(apply(cdens, 1,  function(d) d*mb.density$parameters$pro))
+  }
+  col <- adjustcolor(mclust.options("classPlotColors")[1:2], alpha = 0.3)
+  
+  pdf(file.path(figs, paste0('origin_freq_', i, '.pdf')), width = 12, height  =4)
+  
+  par(family = "CM Roman")
+  h <- hist(temp$surge_origin, breaks = 100, plot = FALSE)
+  par(mar=c(5,3,2,2)+0.1)
+  plot(h, xlab = "Percentage Surge in Visitors from Origin CBG", cex.axis =1.5, cex.lab = 1.5, main = NULL, freq = FALSE,  
+       border = FALSE, col = t_col("grey60",60), ylim = c(0,0.015), xlim = c(-50,maxSurge)) # xlim = c(0, maxSurge),
+  matplot(x, cdens, type = "l", lwd = 1, add = TRUE, lty = c(1,2,5), col = 1)
+  
+  dev.off()
+}
+
+
+
+#*************************************************************************************************
+#### NETWORK MAPS ####
+#*************************************************************************************************
+
+# only protest destination cbgs
+protestCbgs <- fread(file.path(dataOut, 'protestCbgs.csv'))
+which_protest <- as.Date("2021-01-06") # keep only day of protest
+geo_graph <- geo_adj[destination_cbg %in% as.character(protestCbgs[date == which_protest]$protest_cbg)]
+
+
+
+## get Proud Boys locations, match to lat long of cities
+hate <- fread(file.path(dataIn, 'hate', 'splc-hate-groups-2019.csv'))
+hate <- hate[City != ""]
+
+states <- data.table(state.abb, state.name)
+setnames(hate, "State", "state.name")
+
+hate <- states[hate, on = "state.name"]
+hate[is.na(state.abb), state.abb := "DC"]
+hate[,City := paste(City, state.abb)]
+
+
+cities <- fread(file.path(dataIn, 'geo', 'us_cities.csv'))
+cities[, City := paste(CITY, STATE_CODE)]
+cities <- cities[,c("City", "LATITUDE", "LONGITUDE")]
+setnames(cities, c("LATITUDE", "LONGITUDE"), c("lat", "long"))
+
+hate <- cities[hate, on = "City"]
+hate <- hate[Title == "Proud Boys"]
+hate <- hate[!is.na(lat)]
+
+
+
+dates_plot <-  c("2020-12-09", "2020-12-16", "2020-12-23", "2020-12-30", "2021-01-06")
+count <- 1
+
+for (i in dates_plot) {
+  
+  temp <- geo_graph[ds == as.Date(i)]
+
+  
+  pdf(file.path(figs, 'networks', paste0('network_', i, '.pdf')), height = 5, width = 8)
+  
+  par(mar=c(1,1,1,1))
+  par(mgp=c(2.2,0.45,0), tcl=-0.4, mar=c(3.3,3.6,1.1,1.1))
+  maps::map("state",  fill=T, col="grey8", bg="white", border = 'grey30', ylim=c(25,50.0), xlim=c(-130.0,-65.0)) # grey8, white, grey30
+  
+  # origin cbg points
+  points(temp$origin_long, temp$origin_lat, pch=3, cex=0.07, col="chocolate1") # chocolate1 
+  
+  if (i == "2021-01-06") # proud boys locations points
+    points(hate$long, hate$lat, pch=0, cex=0.8, lwd = 0.1, col="green") # chocolate1   
+  
+  # rescale device count distribution for linewidth
+  temp[, num_devices_adj := 0.04 + (num_devices_adj - mean(num_devices_adj, na.rm = TRUE)) / (20*sd(num_devices_adj, na.rm = TRUE))]
+  
+  for (j in (1:dim(temp)[1])) { 
+    inter <- gcIntermediate(c(temp$destination_long[j], temp$destination_lat[j]), # from cbg
+                            c(temp$origin_long[j], temp$origin_lat[j]), n=1000)
+    lines(inter, lwd = temp$num_devices_adj[j] , col= t_col("turquoise2", 85) ) # turquoise2
+  }
+  dev.off()
+  
+  
+  count <- count + 1
+  
+}
+
+
+
+
+#### Network GIF ####
+
+setwd( file.path(figs, 'networks', 'gif'))
+
+redo_gif <- FALSE 
+
+
+if (redo_gif) { 
+  # get data for jan 6
+  temp <- geo_graph[ds == as.Date("2021-01-06")]
+  
+  # rescale device count distribution for linewidth
+  temp[, num_devices_adj := 0.2 + (num_devices_adj - mean(num_devices_adj, na.rm = TRUE)) / (25*sd(num_devices_adj, na.rm = TRUE))]
+  
+  
+  pb <- txtProgressBar(min = 0, max = dim(temp)[1], style = 3)
+  
+  count <- 0
+  
+  for (i in seq(10, dim(temp)[1], 20)) {  # draw 50 more lines each time
+    
+    png(file.path(figs, 'networks', 'gif', paste0('network', str_pad(count, 5, 'left', '0'), '.png')), height = 330*2, width = 480*2) #, height = 5, width = 8)      
+    
+    ## make base figure
+    maps::map("state", fill=TRUE, col="grey8", bg="white", border = 'grey30', ylim=c(25,50.0), xlim=c(-130.0,-65.0)) # grey8, white, grey30
+    
+    # origin cbg points
+    points(temp$origin_long, temp$origin_lat, pch=3, cex=0.1, col="chocolate1") # chocolate1 
+    
+    # proud boys locations points
+    points(hate$long, hate$lat, pch=0, cex=1, lwd = 0.6, col="green") # chocolate1   
+    
+    
+    for (j in (1:i)) { 
+      inter <- gcIntermediate(c(temp$destination_long[j], temp$destination_lat[j]), # from cbg
+                              c(temp$origin_long[j], temp$origin_lat[j]), n=1000)
+      lines(inter, lwd = temp$num_devices_adj[j] , col= t_col("turquoise2", 20) ) # turquoise2
+      
+    }
+    
+    dev.off()
+    
+    count <- count + 1
+    
+    setTxtProgressBar(pb, i)
+  }
+
+} 
+
+
+# create gif from pngs
+p <- file.path(figs, 'networks', 'gif', "network%05d.png")
+
+system(paste0("ffmpeg   -y -framerate 50  -i '", p, "' -c:a copy -c:v libx264 -vcodec libx264 -crf 0 -preset veryslow  network.mp4")) #  -vf 'format=rgba,scale=1024:-2'
+system("ffmpeg -y -i network.mp4 -loop 0 network.gif") #  -vf 'format=rgba,scale=1024:-2' # weird yellow line. Resolve by converting mp4 here, choosing transparent option: https://ezgif.com/video-to-gif/ezgif-1-3604a340275d.mp4
+
+
+setwd(here::here())
+
+
+
+
+
+#*****************************************************************************
+#### ILLUSTRATE ADJACENCY CONCEPT ####
+#*****************************************************************************
+
+fileName = file.path(dataIn, "votes2016_byCbg.csv.gz")
+trumpName = "g16prertru"
+clintonName = "g16predcli"
+trumpName_share = "trump_share_votes"
+clintonName_share = "clinton_share_votes"
+totalName = "total"
+cbgName = "poi_cbg"
+
+# read cbg shapefile as sp object
+cbg_stacked <- read_sf(file.path(dataIn, 'census_bg_shapefiles', 'census_bg_merged.shp')) %>% 
+  st_transform(2163) %>% # transform coordinate system
+  set_names(colnames(.) %>% str_to_lower()) # set column names to lower caps
+
+# get cbg-level votes
+votes_cbg <- fread(fileName)
+setnames(votes_cbg, cbgName, "origin_cbg")
+votes_cbg[, origin_cbg := padCbg(origin_cbg)] 
+setnames(votes_cbg, totalName, "totalvotes_cbg")
+
+# create missing cbgs
+cbg_miss <- setdiff(cbg_stacked$geoid, votes_cbg$origin_cbg)
+cbg_miss <- data.table(origin_cbg = cbg_miss)
+votes_cbg <- rbind.fill(votes_cbg, cbg_miss) %>% as.data.table()
+
+# get cbg neighbors list saved above (loads an object 'listw')
+load(file = file.path(dataBy, 'adjbn.listw.Rdata'))
+
+# get list of cbg ids
+cbg_list <- cbg_stacked$geoid
+
+
+# select u of m econ cbg
+i <- 101098
+
+# get origin cbg
+cbg_select <- cbg_list[i]
+
+# get neighboring cbgs
+cbg_neighbors <- cbg_list[listw$neighbours[[i]]]
+
+
+## check on map
+# get origin and neighbor cbgs from shapefile (and indicate which ones are the neighbors)
+check_df <- cbg_stacked[cbg_stacked$geoid %in% c(cbg_select, cbg_neighbors),]
+check_df$neighbors <- 0
+check_df[check_df$geoid %in% cbg_neighbors,]$neighbors <- 1
+
+# plot queen adjacency on map
+p <- ggplot() + geom_sf(data = check_df, aes(fill = factor(neighbors))) + 
+  scale_fill_manual(values = c("grey80", "grey60"), aesthetics = "fill") + 
+  theme(legend.position = "none") 
+ggsave(file.path(figs, 'adj_queen.pdf'),  height = 3, width = 6)
+
+# plot rook adjacency on map
+check_df <- check_df[check_df$geoid != '261614005001',]  # illustrate rook adjacency concept
+p <- ggplot() + geom_sf(data = check_df, aes(fill = factor(neighbors))) + 
+  scale_fill_manual(values = c("grey80", "grey60"), aesthetics = "fill") + 
+  theme(legend.position = "none") 
+ggsave(file.path(figs, 'adj_rook.pdf'), height = 3, width = 6)
+
+
+
+
+
+
+#******************************************************************************
+####***********************************************************************####
+#### CROSS SECTION ANALYSIS: AUSTIN'S STATA ANAYLSIS ####
+####***********************************************************************####
+#******************************************************************************
+
+## run stata code
+dir_dt <- data.table(dir = dir) # for passing directory to Stata
+RStata::stata(file.path(codeDir, "analysis", "1.cbg_cross_estimation_19oct2022.do"), data.in = dir_dt) # main analysis 
+
+# load data
+cross <- fread(file.path(dataOut, 'cross_regression.csv'))
+
+setnames(cross, "origin_cbg", "cbg")
+
+cross[, cbg := as.numeric(cbg)]
+cross <- cross[order(cbg)]
+
+demo <- haven::read_dta(file.path(dataIn, 'census_data', 'demo2010n2019.dta')) %>% setDT() # load file with some more demogr. info
+demo[, cbg := as.numeric(cbg)]
+
+cross <- demo[cross, on = "cbg"] # merge 
+
+## generate regressands
+
+# 1 num_devices
+cross[, num_devices_diff_3m := num_devices_adj - num_devices_adj.avg3m]
+cross[, num_devices_diff_asinh_3m := asinh(num_devices_adj) - asinh(num_devices_adj.avg3m)]
+cross[, num_devices_diff_log_3m := log(1+num_devices_adj) - log(1+num_devices_adj.avg3m)]
+cross[, num_devices_diff_2m := num_devices_adj - num_devices_adj.avg2m]
+cross[, num_devices_diff_asinh_2m := asinh(num_devices_adj) - asinh(num_devices_adj.avg2m)]
+cross[, num_devices_diff_log_2m := log(1+num_devices_adj) - log(1+num_devices_adj.avg2m)]
+cross[, num_devices_diff_1m := num_devices_adj - num_devices_adj.avg1m]
+cross[, num_devices_diff_asinh_1m := asinh(num_devices_adj) - asinh(num_devices_adj.avg1m)]
+cross[, num_devices_diff_log_1m := log(1+num_devices_adj) - log(1+num_devices_adj.avg1m)]
+
+# 2 device share: origin
+cross[, device_share_origin := num_devices_adj / pop]
+cross[, device_share_origin_diff_3m := (device_share_origin - device_share_originavg3m)*100]
+cross[, device_share_origin_diff_2m := (device_share_origin - device_share_originavg2m)*100]
+cross[, device_share_origin_diff_1m := (device_share_origin - device_share_originavg1m)*100]
+
+# 3 device share: destination
+cross[, num_devices_adj_total := sum(num_devices_adj, na.rm = TRUE)]
+cross[, device_share_dest := num_devices_adj / num_devices_adj_total]
+cross[, device_share_dest_diff_3m := (device_share_dest - device_share_destavg3m)*100]
+cross[, device_share_dest_diff_2m := (device_share_dest - device_share_destavg2m)*100]
+cross[, device_share_dest_diff_1m := (device_share_dest - device_share_destavg1m)*100]
+
+# 4 extensive margin
+cross[, extensive := as.numeric(num_devices_adj > 0)]
+cross[, capitol := 0]
+cross[num_devices > 0, capitol := 1]
+cross[num_devices > 0 & nearCapitol == 1, capitol := 2]
+cross[, extensive_either := capitol > 0]
+cross[, extensive_capitol := as.numeric(nearCapitol == 1)]
+
+## generate regressors
+cross[, median_hh_inc_ln := log(median_hh_inc)]
+cross[, parler_count_ln := log(1 + parler_count)]
+cross[, distTo_ProudBoys := distTo_ProudBoys / 1000]
+cross[, distTo_ProudBoys_ln := log(distTo_ProudBoys)]
+cross[, trump_island := as.numeric(trump_neighbor  < trump_share_votes)]
+cross[, trump_island_2020 := as.numeric(trump_neighbor_2020 < trump_share_votes_2020)]
+cross[, trump_island_any := as.numeric(trump_island == 1 | trump_island_2020 == 1)]
+cross[, parler_count2 := parler_count^2]
+
+# new diff measures
+cross[, trump_diff := trump_share_votes - trump_neighbor]
+terciles <- quantile(cross$trump_diff, probs = seq(0,1,1/3), na.rm = TRUE)
+cross[, trump_island_ter := 0]
+cross[trump_diff %between% terciles[1:2], trump_island_ter := 1]
+cross[trump_diff %between% terciles[2:3], trump_island_ter := 2]
+cross[trump_diff %between% terciles[3:4], trump_island_ter := 3]
+cross[, trump_island_ter := factor(trump_island_ter)]
+cross[, trump_island_ter := relevel(trump_island_ter, '1')]
+
+# set variable names for tables
+dict <- c("num_devices_diff_log_3m" = "\\small Protesters (Log \\Delta), 3m",
+          "num_devices_diff_asinh_3m" = "\\small Protesters (Asinh \\Delta), 3m",
+          "num_devices_diff_log_2m" = "\\small Protesters (Log \\Delta), 2m",
+          "num_devices_diff_asinh_2m" = "\\small Protesters (Asinh \\Delta), 2m",
+          "num_devices_diff_log_1m" = "\\small Protesters (Log \\Delta), 1m", 
+          "num_devices_diff_asinh_1m" = "\\small Protesters (Asinh \\Delta), 1m", 
+          "device_share_origin_diff_3m" = "\\small \\nicefrac{Protesters}{CBG Pop} (\\Delta)",
+        "device_share_origin_diff_2m" = "\\small \\nicefrac{Protesters}{CBG Pop} (\\Delta), 2m",
+        "device_share_origin_diff_1m" = "\\small \\nicefrac{Protesters}{CBG Pop} (\\Delta), 1m",
+        "device_share_dest_diff_3m" = "\\footnotesize \\nicefrac{Protesters}{Total Protesters} (\\Delta)",
+        "device_share_dest_diff_2m" = "\\footnotesize \\nicefrac{Protesters}{Total Protesters} (\\Delta), 2m",
+        "device_share_dest_diff_1m" = "\\footnotesize \\nicefrac{Protesters}{Total Protesters} (\\Delta), 1m",
+        "trump_island" = "Island 2016",
+        "trump_island_2020" = "Island",
+        "distto_proudboys_ln" = "Dist. to Proud Boys (Log)",
+        "parler_count_ln" = "# Parler Videos (Log)",
+        "median_hh_inc_ln" = "Median HH Income (Log)",
+        "male" = "Male", 
+        "race_w" = "White",
+        "race_b" = "Black",
+        "race_h" = "Hispanic",
+        "edu_highschool" = "High School Diploma",
+        "edu_bach" = "Bach Dipl.",
+        "publicassistance" = "Public Assistance",
+        "unemployed" = "Unemployed",
+        "old_1824" = "Age: 18-24",
+        "old_2564" = "Age: 25-64",
+        "old_65" = "Age: 65+",
+        "trump_share_votes" = "Trump Share",
+        "extensive" = "\\small Protester (=1)", 
+        "trump_diff" = "Trump",
+        "trump_island_ter" = "Trump: Origin vs. Adj Terciles"
+)
+fixest::setFixest_dict(dict)
+        
+
+fwrite(cross, file.path(dataBy, 'cross_regression_prepped.csv.gz'))
+
+
+
+#******************************************************************************
+#### CROSS SECTION: CONTROL ROBUSTNESS ####
+#******************************************************************************
+
+
+cross <- fread(file.path(dataBy, 'cross_regression_prepped.csv.gz'))
+
+redo_regressions <- FALSE  # rerun all combinations of regressions (takes about 15 mins)
+
+# 
+
+if (redo_regressions) { 
+  
+  # 2016
+  controlRobust()
+  
+  # 2020
+  controlRobust(fixed = c("trump_share_votes_2020", "trump_island"), 
+                fixed_inter = "trump_island:trump_share_votes_2020", outName = "controlRobust_island2016_2020_")
+  
+  
+} else {
+  
+  ggthemr('fresh')
+  
+  
+  
+  for (fe in c("", "| origin_state", "| origin_county")) { 
+    
+    # 2016
+    plotRobust(fe)
+    
+    # 2020
+    plotRobust(fe, fileName = "controlRobust_island2016_2020_")
+  
+  }
+  
+}
+
+
+
+
+
+
+#******************************************************************************
+#### INCLUDE SURGE CBGS PROXIMATE TO RIOT ####
+#******************************************************************************
+
+# create variables
+cross[, extensive_noriot := as.numeric(num_devices_adj > 0 & nearCapitol == 0)]
+cross[, extensive := as.numeric(num_devices_adj > 0)]
+cross[, index := index(cross)]
+
+cross[, trump_diff := trump_share_votes - trump_neighbor]
+terciles <- quantile(cross$trump_diff, probs = seq(0,1,1/3), na.rm = TRUE)
+cross[, island_terc := 0]
+cross[is.na(trump_diff), island_terc := NA]
+cross[trump_diff %between% terciles[1:2], island_terc := 1]
+cross[trump_diff %between% terciles[2:3], island_terc := 2]
+cross[trump_diff %between% terciles[3:4], island_terc := 3]
+cross[, island_terc := factor(island_terc)]
+cross[, island_terc := relevel(island_terc, '1')]
+
+
+cross_noriot <- cross[nearCapitol == 0]
+
+vars_reg <- c("trump_share_votes_2020", "trump_island_2020", "trump_share_votes_2020:trump_island_2020",  
+              "distTo_ProudBoys_ln", "parler_count_ln", "median_hh_inc_ln", "male", 
+              "race_w", "race_b", "race_h", "edu_highschool", "publicAssistance", 
+              "unemployed")
+
+ggthemr('fresh')
+
+depvar <- "extensive"
+
+
+for (fe in c("", "| origin_state", "| origin_county")) { 
+  
+  fmla <- paste0("extensive", " ~ ", paste(c(vars_reg), collapse = "+"), fe)
+  fmla <- as.formula(fmla)
+  
+  mdl1 <- fixest::feols(fmla, cross, notes = FALSE)
+  mdl1 <- summary(mdl1, se = "cluster", cluster = "origin_county")
+  
+  fmla <- paste0("num_devices_diff_log_1m", " ~ ", paste(c(vars_reg), collapse = "+"), fe)
+  fmla <- as.formula(fmla)
+  mdl2 <- fixest::feols(fmla, cross, notes = FALSE)
+  mdl2 <- summary(mdl2, se = "cluster", cluster = "origin_county")  
+  
+  vars_keep <-  c("trump_share_votes:nearCapitol",  "trump_share_votes:trump_island:nearCapitol", "nearCapitol:parler_count_ln", 
+                  "nearCapitol:distTo_ProudBoys_ln")
+  cis1 <- getCIs(mdl1)[coeff_names %in% vars_keep]
+  cis2 <- getCIs(mdl2)[coeff_names %in% vars_keep]
+  
+  ggplot() + 
+    geom_errorbar(aes(x = coeffs, ymin = min, ymax = max), 
+                  colour = "firebrick4", position = position_nudge(x = -0.05), width = 0.4, data = cis1) +
+    #geom_errorbar(aes(x = coeffs, ymin = min, ymax = max), 
+    #              colour = "firebrick1", width = 0.4, position = position_nudge(x = 0.05), data = cis2) + 
+    facet_grid(~ coeff_names)
+  
+}
+
+
+
+#####*****************************************************************************#####
+####  PRECINCT-TO-CBG VALIDATION ####
+#####*****************************************************************************#####
+
+
+cross <- fread(file.path(dataOut, 'cross_regression.csv'))
+
+# county-level correlation
+cross[, missing_cbgs_county := sum(is.na(g20prertru) | is.na(g20predbid)) / sum(!is.na(origin_cbg)), by = "origin_county"]
+cross[, votes_trump_county_share_from_cbg := sum(g20prertru, na.rm=TRUE) / sum(g20prertru + g20predbid, na.rm=TRUE), by = "origin_county"]
+temp <- cross[!duplicated(origin_county) & !is.na(state) & missing_cbgs_county < 0.00001]
+temp <- temp[!is.na(votes_trump_county_share_from_cbg) & !is.na(trump_share_votes_county_2020)]
+cor(temp$votes_trump_county_share_from_cbg, temp$trump_share_votes_county_2020)
+
+# state-level correlation
+cross[, missing_cbgs_county := sum(is.na(g20prertru) | is.na(g20predbid)) / sum(!is.na(origin_cbg)), by = "state"]
+cross[, votes_trump_county_share_from_cbg := sum(g20prertru, na.rm=TRUE) / sum(g20prertru + g20predbid, na.rm=TRUE), by = "state"]
+temp <- cross[!duplicated(origin_county) & !is.na(state) & missing_cbgs_county < 0.00001]
+temp <- temp[!is.na(votes_trump_county_share_from_cbg) & !is.na(trump_share_votes_state_2020)]
+cor(temp$votes_trump_county_share_from_cbg, temp$trump_share_votes_state_2020)
+
+
+
+#####*****************************************************************************#####
+####  RDD DESIGN ####
+#####*****************************************************************************#####
+
+
+#### Prep data #### 
+
+cross <- fread(file.path(dataOut, 'cross_regression.csv'))
+
+
+cross <- unique(cross, by = "origin_cbg")
+cross[, origin_cbg := padCbg(origin_cbg)]
+
+cross <- cross[pop > 0]
+
+# create some variable
+
+cross[, island := as.numeric(trump_neighbor < trump_share_votes)]
+cross[, island_var := trump_share_votes - trump_neighbor]
+
+cross[, particip_prob := num_devices  / number_devices_residing]
+cross[, surge := (num_devices_adj - num_devices_adj.avg1m) / number_devices_residing]
+
+cross <- cross[state != 11] # drop dc
+
+cross[, extensive := as.numeric(num_devices > 0)]
+cross[, origin_county := as.numeric(origin_county)]
+
+cross[, D := as.numeric(biden_share_votes_state_2020 > 0.5)]
+cross[, island_2020 := as.numeric(trump_neighbor_2020 < trump_share_votes_2020)]
+
+cross[, num_devices_diff_log_1m := log(1+num_devices_adj) - log(1+num_devices_adj.avg1m)]
+
+
+fwrite(cross, file.path(dataOut, 'cross_rdd.csv'))
+
+
+
+#### Continuity Plots #### 
+cross <- fread(file.path(dataOut, "cross_rdd.csv"))
+
+vars_labs <- c("pop" = "Population", "male" = "Male (%)", "race_w" = "White (%)", "race_b" = "Black (%)", "race_h" = "Hispanic (%)", "edu_highschool" = "High School (%)", 
+               "publicAssistance" = "Public Assist. (%)", "unemployed" = "Unemployed (%)", "distTo_ProudBoys" = "Dist. Proud Boys", "parler_count" = "# Parler Videos", 
+               "median_hh_inc" = "Median HH Income", "island_var" = "Island (Contin.)")
+
+
+
+for (i in 1:length(vars_labs)) {
+  
+  var <- names(vars_labs)[i]
+  var_mean <- mean(cross[[var]], na.rm = TRUE)
+  var_sd <- sd(cross[[var]], na.rm = TRUE)
+  cross[, var_int := cross[[var]] ]
+  cross[, var_state := mean(var_int, na.rm = TRUE), by = "state"]
+  
+  cross[, var_county := mean(var_int, na.rm = TRUE), by = "origin_county"]
+  
+  ylim <- NULL
+  if (var == "pop") ylim <- c(0,15000)
+  if (var == "distTo_ProudBoys") ylim <- c(0, 1.5*10^6)
+  if (grepl("race", var)) ylim <- c(0, 1.5)
+  if (var == "parler_count") ylim <- c(0, 50)
+  
+  rddplot(df = cross, y_var = var, ylab = vars_labs[i], conditional = FALSE, jwidth = 0.0001, xlim = c(0.4,0.6),  poly = 2, alpha = 0.1, ylim = ylim)
+  ggsave(file.path(figs, paste0('rdd_contin_cbg_', names(vars_labs)[i], ".pdf")), width = 5, height = 4, device = cairo_pdf)
+}
+
+
+### covariate balance test
+vars <- names(vars_labs)
+
+p_vals_conv <- list()
+p_vals_rob <- list()
+# p_vals_hon <- list()
+cluster <- "state"
+
+for (var in vars) { 
+  print(var)
+  keepvars <- c(var, "extensive", "particip_prob", "num_devices_diff_log_1m", 
+               "biden_share_votes_state_2020", "biden_share_votes_county_2020", "origin_county", "state")
+  df_est <- na.omit(cross[pop >0 ,..keepvars])
+  mdl <- rdrobust::rdrobust(y = df_est[[var]], x = df_est$biden_share_votes_state_2020, c = 0.5, cluster = df_est[[cluster]], 
+                            masspoints = "check", bwcheck = 4, vce="hc0")
+  summary(mdl)
+
+  # mdl_h <- RDHonest::RDHonest(particip_prob ~ biden_share_votes_state_2020, data = df_est, cutoff = 0.5, h = h, M = m, 
+  #                           clusterid = get(cluster))
+  # 
+  # p_val <-   2*pnorm(abs(mdl_h$coefficients$estimate / mdl_h$coefficients$std.error), lower.tail=FALSE)
+  pv <- mdl$pv
+  p_vals_conv <- c(p_vals_conv, pv[rownames(pv) == "Conventional"])
+  p_vals_rob <- c(p_vals_rob, pv[rownames(pv) == "Robust"])
+  #p_vals_hon <- c(p_vals_hon, c(var = p_val))
+
+}
+names(p_vals_conv) <- vars
+names(p_vals_rob) <- vars
+#names(p_vals_hon) <- vars
+test <- stats::p.adjust(p_vals_rob, 
+                method = "holm")
+df <- data.table(test, vars_labs, unlist(p_vals_rob)) 
+fwrite(df, file.path(dataOut, 'balance_test_rdd.csv'))
+
+
+
+
+#### Biden Vote Share Histogram #### 
+
+fn <- file.path(figs, 'hist_biden_state.pdf')
+cairo_pdf(file = fn, width = 6, height = 4)
+par(family = "LM Roman 10")
+hist(x = cross$biden_share_votes_state_2020, xlab = "Biden State Vote Share (2020)", col = "white", main = "", prob = TRUE)
+abline(v = "0.5", col = "red", lwd = 2)
+dev.off()
+
+
+# lines(density(cross$biden_share_votes_state_2020, na.rm = TRUE, adjust = 2), # density plot
+#       lwd = 2, # thickness of line
+#       col = "black")
+
+
+#### Biden Midnight Swing Histogram #### 
+
+fn <- file.path(figs, 'hist_biden_swing.pdf')
+cairo_pdf(file = fn, width = 6, height = 4)
+par(family = "LM Roman 10")
+hist(x = -cross$repSwing_pp, xlab = "Pro-Biden Election Night Swing", col = "white", main = "", prob = TRUE, 
+     xlim = c(-1,1), breaks = 2000)
+abline(v = "0", col = "red", lwd = 2)
+dev.off()
+
+
+
+
+#### RDD plots #### 
+
+cross <- fread(file.path(dataOut, 'cross_rdd.csv'))
+cross <- cross[!state %in% c(24,51)] # drop dc, maryland and virginia
+
+
+#### cbg
+
+rddplot(df = cross, y_var = "particip_prob", conditional = TRUE, jwidth = 0.0001, xlim = c(0.4,0.6), ylim = c(0,0.10), poly = 2, 
+        ylab = "Conditional Participation Probability", alpha = 0.25)
+ggsave(file.path(figs, 'rddplot_prob_cbg.pdf'), width = 6, height = 5, device = cairo_pdf)
+rddplot(df = cross, y_var = "num_devices_diff_log_1m", conditional = TRUE, jwidth = 0.0001, xlim = c(0.4,0.6), poly = 2, ylab = "Protesters (Log \U0394)",
+        alpha = 0.25)
+ggsave(file.path(figs, 'rddplot_num_cbg.pdf'), width = 6, height = 5, device = cairo_pdf)
+
+
+#### county
+cross[, particip_prob_county := sum(num_devices) / sum(number_devices_residing * (num_devices > 0)), by = "origin_county"]
+#cross[, particip_prob_county := sum(num_devices) / sum(number_devices_residing), by = "origin_county"]
+cross[num_devices > 0, num_devices_diff_log_1m_county := mean(num_devices_diff_log_1m, na.rm = TRUE),, by = "origin_county"]
+
+cross[, surge := mean(num_devices) , by = "origin_county"]
+
+
+rddplot(df = cross, y_var = "particip_prob_county", conditional = TRUE, jwidth = 0.0001, xlim = c(0.4,0.6), size = 1.7, ylim = c(0,0.06), poly = 2, 
+        ylab = "Conditional Participation Probability", alpha = 0.25)
+ggsave(file.path(figs, 'rddplot_prob_county.pdf'), width = 6, height = 5, device = cairo_pdf)
+rddplot(df = cross, y_var = "num_devices_diff_log_1m_county", conditional = TRUE, jwidth = 0.0001, xlim = c(0.4,0.6), poly = 2, 
+        ylab = "Protesters (Log \U0394)", alpha = 0.25)
+ggsave(file.path(figs, 'rddplot_num_county.pdf'), width = 6, height = 5, device = cairo_pdf)
+
+
+
+
+#### state
+cross[, particip_prob_state := sum(num_devices) / sum(number_devices_residing * (num_devices > 0)), by = "state"]
+cross[, extensive_state := mean(extensive, na.rm = TRUE), by = "state"]
+#cross[, particip_prob_state := sum(num_devices) / sum(number_devices_residing), by = "state"]
+cross[num_devices > 0, num_devices_diff_log_1m_state := mean(num_devices_diff_log_1m, na.rm = TRUE), by = "state"]
+
+rddplot(df = cross, y_var = "particip_prob_state", conditional = TRUE, jwidth = 0.0001, xlim = c(0.4,0.6), ylim = c(0, 0.03), size = 2.5, poly = 2, ylab = "Conditional Participation Probability")
+ggsave(file.path(figs, 'rddplot_prob_state.pdf'), width = 6, height = 5, device = cairo_pdf)
+rddplot(df = cross, y_var = "num_devices_diff_log_1m_state", conditional = FALSE, jwidth = 0.0001, xlim = c(0.4,0.6), ylim = c(2,4), size = 2, poly = 2, ylab = "Protesters (Log \U0394)")
+ggsave(file.path(figs, 'rddplot_num_state.pdf'), width = 6, height = 5, device = cairo_pdf)
+
+
+
+
+
+#### Estimate RDD Design ####
+
+
+
+
+
+#*****************************
+#### robust estimator 
+# NB: the conventional estimate of rdrobust does indeed overlap with the estimate produced by RDestimate
+
+## num_devices_log_diff
+
+
+#### reload data
+
+stateRDD <- function(cluster = "origin_county") { 
+  
+  cross <- fread(file.path(dataOut, 'cross_rdd.csv'))
+  
+  
+  
+  
+  df_est <- na.omit(cross[pop > 0,c("extensive", "particip_prob", "num_devices_diff_log_1m", "biden_share_votes_state_2020", "biden_share_votes_county_2020", "origin_county", "state")])
+  
+  
+  #### prep table
+  
+  ests_conv <- "$\\tau$"
+  ests_rob <- "Robust $\\tau$"
+  ses_conv <- " "
+  ses_rob <- " "
+  nobs_eff_left <- "Effective N (L) "
+  nobs_eff_right <- "Effective N (R)"
+  bw_est <- "Bandwidth (Main)"
+  bw_bias <- "Bandwidth (Bias)"
+  mean_dv <- paste0("Outcome Mean & ", paste0(c(rep(roundS(mean(df_est$num_devices_diff_log_1m),4),3), rep(roundS(mean(df_est$particip_prob), 4),3)), collapse = "&"))
+  
+  h_mat <- c()
+  b_mat <- c()
+  
+  #### estimate
+  
+  count <- 1
+  df_bw <- fread(file.path(dataOut, 'bws.csv'))
+  for (var in c("num_devices_diff_log_1m", "particip_prob")) {
+
+    for (j in c(1,2,1/2)) {
+      if (j == 1) { # re-estimate bandwidth
+        # estimate model
+        mdl <- rdrobust::rdrobust(y = df_est[[var]], x = df_est$biden_share_votes_state_2020, c = 0.5, cluster = df_est[[cluster]], 
+                                  masspoints = "check", bwcheck = 6, vce="hc0") # just setting masspoints adjust option to low threshold cause code throws an error if I set it off
+        
+        summary(mdl)
+        # store estimated bandwidths
+        h <- mdl$bws[1,1]
+        b <- mdl$bws[2,1]
+        h_mat <- c(h_mat, h)
+        b_mat <- c(b_mat, b)
+      } else { # 
+        # estimate model using half or double of the estimated bandwiths 
+        mdl <- rdrobust::rdrobust(y = df_est[[var]], x = df_est$biden_share_votes_state_2020, c = 0.5, cluster = df_est[[cluster]], 
+                                  masspoints = "check", bwcheck = 6, h = h*j, b = b*j, vce="hc0")
+      }
+      
+      # code stars
+      star_conv <- paste0(roundS(mdl$Estimate[colnames(mdl$Estimate) == 'tau.us'], 4), "^{", pval_stars(mdl$pv[1]), "}") # helper function for non-scientific rounding
+      star_rob <- paste0(roundS(mdl$Estimate[colnames(mdl$Estimate) == 'tau.bc'], 4), "^{", pval_stars(mdl$pv[3]), "}")
+      
+      # assign estimation results to latex lines
+      assign(paste0("m", count), mdl) # assign model to name
+      ests_conv <- paste0(ests_conv, " & ",star_conv)
+      ses_conv <- paste0(ses_conv, " & (", roundS(mdl$Estimate[colnames(mdl$Estimate) == 'se.us'],4), ")")
+      ests_rob <- paste0(ests_rob, " & ", star_rob)
+      ses_rob <- paste0(ses_rob, " & (", roundS(mdl$Estimate[colnames(mdl$Estimate) == 'se.rb'], 4), ")")
+      nobs_eff_left <- paste0(nobs_eff_left, " & ", mdl$N_h[1])
+      nobs_eff_right <- paste0(nobs_eff_right, " & ", mdl$N_h[2])
+      bw_est <- paste0(bw_est, " & ", roundS(h * j,4))
+      bw_bias <- paste0(bw_bias, " & ", roundS(b * j,4))
+      
+      count <- count + 1
+    }
+  }
+    
+  tab <- "\\begin{tabular}{lcccccc} \\tabularnewline\\midrule\\midrule  DV & \\multicolumn{3}{c}{Protesters (Log $\\Delta$)} & \\multicolumn{3}{c}{Particip. Prob.}  \\\\ 
+  \\cmidrule(r){2-4} \\cmidrule(l){5-7} 
+  & (BW) & (BW $\\times$ 2) & (BW $\\times$ 0.5) &  (BW) & (BW $\\times$ 2) & (BW $\\times$ 0.5) \\\\ \\hline \\\\ "
+  
+  cat(c(tab,
+  ests_conv, " \\\\ ", 
+  ses_conv, "\\\\ ", 
+  ests_rob, "\\\\ ",
+  ses_rob, "\\\\ \\\\ \\hline ", 
+  "\\multicolumn{7}{l}{ \\textsc{Statistics}} \\\\",
+  mean_dv, "\\\\",
+  nobs_eff_left, "\\\\ ",
+  nobs_eff_right,"\\\\ ",
+  bw_est, "\\\\ ",
+  bw_bias, "\\\\ \\midrule \\midrule 
+  \\end{tabular}  "),  file = file.path(tabs, paste0('rdd_cl_', cluster, '.tex'))
+  )
+  
+  fwrite(data.table(h = h_mat, b = b_mat), file.path(dataOut, 'bws.csv'))
+  
+  
+  #*****************************
+  #### honest estimator
+  
+  df_bw <- fread(file.path(dataOut, 'bws.csv'))
+    
+  
+  ests_num <- "\\multicolumn{7}{l}{\\textbf{Panel A:} Protesters (Log $\\Delta$)} \\\\ $\\tau$"
+  ests_prob <- "\\multicolumn{7}{l}{\\textbf{Panel B:} Particip. Prob.} \\\\ $\\tau$"
+  ses_num <- " "
+  ses_prob <- " "
+  nobs_eff_num <- "Effective N"
+  nobs_eff_prob <- "Effective N"
+  bw_est_num <- "Bandwidth (Main)"
+  bw_est_prob <- "Bandwidth (Main)"
+  
+  
+  mean_num <- paste0("Outcome Mean & ", paste0(c(rep(roundS(mean(df_est$num_devices_diff_log_1m),4),4)), collapse = "&"))
+  mean_prob <- paste0("Outcome Mean & ", paste0(c(rep(roundS(mean(df_est$particip_prob), 4),4)), collapse = "&"))
+  
+  
+  h <- df_bw$h[1]
+  
+  m_num <- c(0.01, 0.1, 1, 10)
+  
+  for (m in m_num) {
+    
+    mdl <- RDHonest::RDHonest(num_devices_diff_log_1m ~ biden_share_votes_state_2020, data = cross, cutoff = 0.5, h = h, M = m, 
+                              clusterid = get(cluster))
+    
+    p_val <-   2*pnorm(abs(mdl$coefficients$estimate / mdl$coefficients$std.error), lower.tail=FALSE)
+    star_conv <- paste0(roundS(mdl$coefficients$estimate, 4), "^{", pval_stars(p_val), "}") # helper function for non-scientific rounding
+    ests_num <- paste0(ests_num, " & ",star_conv)
+    ses_num <- paste0(ses_num, " & (", roundS(mdl$coefficients$std.error,4), ")")
+    nobs_eff_num <- paste0(nobs_eff_num, " & ", roundS(mdl$coefficients$eff.obs,0))
+    bw_est_num <- paste0(bw_est_num, " & ", roundS(h,4))
+  
+  }
+  
+  
+  m_prob <- c(0.0001, 0.001, 0.01, 0.1)
+  
+  h <- df_bw$h[2]
+  
+  for (m in m_prob) {
+    
+    mdl <- RDHonest::RDHonest(particip_prob ~ biden_share_votes_state_2020, data = cross, cutoff = 0.5, h = h, M = m, 
+                              clusterid = get(cluster))
+    
+    p_val <-   2*pnorm(abs(mdl$coefficients$estimate / mdl$coefficients$std.error), lower.tail=FALSE)
+    star_conv <- paste0(roundS(mdl$coefficients$estimate, 4), "^{", pval_stars(p_val), "}") # helper function for non-scientific rounding
+    ests_prob <- paste0(ests_prob, " & ",star_conv)
+    ses_prob <- paste0(ses_prob, " & (", roundS(mdl$coefficients$std.error,4), ")")
+    nobs_eff_prob <- paste0(nobs_eff_prob, " & ", roundS(mdl$coefficients$eff.obs,0))
+    bw_est_prob <- paste0(bw_est_prob, " & ", roundS(h,4))
+  }
+  
+  
+  tab <- "\\begin{tabular}{lcccc} \\tabularnewline\\midrule\\midrule  DV 
+  & (1) & (2) & (3) &  (4)  \\\\ \\hline "
+  
+  cat(c(tab,
+        ests_num, " \\\\ ", 
+        ses_num, "\\\\ ", 
+        " \\hline",
+        paste0("M Bound &", paste0(m_num, collapse = "&")), "\\\\",
+        mean_num, "\\\\",
+        nobs_eff_num, "\\\\",
+        bw_est_num, "\\\\ \\hline",
+        ests_prob, " \\\\ ", 
+        ses_prob, "\\\\ ", 
+        " \\hline",
+        paste0("M Bound &", paste0(m_prob, collapse = "&")), "\\\\",
+        mean_prob, "\\\\",
+        nobs_eff_prob, "\\\\",
+        bw_est_prob, "\\\\ \\midrule \\midrule \\end{tabular}"),  
+        file = file.path(tabs, paste0('rdd_honest_cl_', cluster , '.tex'))
+  )
+
+}
+
+## run stateRDD with origin_county cluster
+stateRDD()
+
+## run stateRDD with state cluster
+stateRDD(cluster="state")
+
+
+#*****************************
+#### robust estimator WITH CONTROLS
+# NB: the conventional estimate of rdrobust does indeed overlap with the estimate produced by RDestimate
+
+## num_devices_log_diff
+
+
+#### reload data
+
+cross <- fread(file.path(dataOut, 'cross_rdd.csv'))
+
+vars_control <- c("pop", "publicAssistance", "male", "race_w", "race_b", "race_h", 
+                  "median_hh_inc", "unemployed", "edu_highschool", "publicAssistance", "parler_count", "distTo_ProudBoys")
+df_est <- na.omit(cross[pop > 0,c("extensive", "particip_prob", "num_devices_diff_log_1m", "biden_share_votes_state_2020", 
+                                  "origin_county", "state", ..vars_control)])
+
+
+#### prep table
+
+ests_conv <- "$\\tau$"
+ests_rob <- "Robust $\\tau$"
+ses_conv <- " "
+ses_rob <- " "
+nobs_eff_left <- "Effective N (L) "
+nobs_eff_right <- "Effective N (R)"
+bw_est <- "Bandwidth (Main)"
+bw_bias <- "Bandwidth (Bias)"
+mean_dv <- paste0("Outcome Mean & ", paste0(c(rep(roundS(mean(df_est$num_devices_diff_log_1m),4),3), rep(roundS(mean(df_est$particip_prob), 4),3)), collapse = "&"))
+
+h_mat <- c()
+b_mat <- c()
+
+#### estimate
+count <- 1
+for (var in c("num_devices_diff_log_1m", "particip_prob")) {
+  for (j in c(1,2,1/2)) {
+    if (j == 1) { # re-estimate bandwidth
+      # estimate model
+      mdl <- rdrobust::rdrobust(y = df_est[[var]], x = df_est$biden_share_votes_state_2020, c = 0.5, cluster = df_est$origin_county, 
+                                masspoints = "adjust", bwcheck = 4, 
+                                covs = df_est[,..vars_control]) # just setting masspoints adjust option to low threshold cause code throws an error if I set it off
+      
+      # store estimated bandwidths
+      h <- mdl$bws[1,1]
+      b <- mdl$bws[2,1]
+      h_mat <- c(h_mat, h)
+      b_mat <- c(b_mat, b)
+    } else { # 
+      # estimate model using half or double of the estimated bandwiths 
+      mdl <- rdrobust::rdrobust(y = df_est[[var]], x = df_est$biden_share_votes_state_2020, c = 0.5, cluster = df_est$origin_county, masspoints = "adjust", bwcheck = 4, h = h*j, b = b*j)
+    }
+    
+    # code stars
+    star_conv <- paste0(roundS(mdl$Estimate[colnames(mdl$Estimate) == 'tau.us'], 4), "^{", pval_stars(mdl$pv[1]), "}") # helper function for non-scientific rounding
+    star_rob <- paste0(roundS(mdl$Estimate[colnames(mdl$Estimate) == 'tau.bc'], 4), "^{", pval_stars(mdl$pv[3]), "}")
+    
+    # assign estimation results to latex lines
+    assign(paste0("m", count), mdl) # assign model to name
+    ests_conv <- paste0(ests_conv, " & ",star_conv)
+    ses_conv <- paste0(ses_conv, " & (", roundS(mdl$Estimate[colnames(mdl$Estimate) == 'se.us'],4), ")")
+    ests_rob <- paste0(ests_rob, " & ", star_rob)
+    ses_rob <- paste0(ses_rob, " & (", roundS(mdl$Estimate[colnames(mdl$Estimate) == 'se.rb'], 4), ")")
+    nobs_eff_left <- paste0(nobs_eff_left, " & ", mdl$N_h[1])
+    nobs_eff_right <- paste0(nobs_eff_right, " & ", mdl$N_h[2])
+    bw_est <- paste0(bw_est, " & ", roundS(h * j,4))
+    bw_bias <- paste0(bw_bias, " & ", roundS(b * j,4))
+    
+    count <- count + 1
+  }
+}
+
+tab <- "\\begin{tabular}{lcccccc} \\tabularnewline\\midrule\\midrule  DV & \\multicolumn{3}{c}{Protesters (Log $\\Delta$)} & \\multicolumn{3}{c}{Particip. Prob.}  \\\\ 
+\\cmidrule(r){2-4} \\cmidrule(l){5-7} 
+& (BW) & (BW $\\times$ 2) & (BW $\\times$ 0.5) &  (BW) & (BW $\\times$ 2) & (BW $\\times$ 0.5) \\\\ \\hline \\\\ "
+
+cat(c(tab,
+      ests_conv, " \\\\ ", 
+      ses_conv, "\\\\ ", 
+      ests_rob, "\\\\ ",
+      ses_rob, "\\\\ \\\\ \\hline ", 
+      "\\multicolumn{7}{l}{ \\textsc{Statistics}} \\\\",
+      mean_dv, "\\\\",
+      nobs_eff_left, "\\\\ ",
+      nobs_eff_right,"\\\\ ",
+      bw_est, "\\\\ ",
+      bw_bias, "\\\\ \\midrule \\midrule 
+\\end{tabular}  "),  file = file.path(tabs, 'rdd_controls.tex')
+)
+
+
+
+
+#### Robustness with Congressional Districts ####
+
+
+
+#### Figures 
+
+cross <- fread(file.path(dataOut, "cross_rdd.csv"))
+
+
+
+cross <- cross[!state %in% c(24,51)] # drop dc, maryland and virginia
+cross[, biden_votes_share_2020_cd116 := 1 - trump_votes_share_2020_cd116]
+
+#### cbg
+
+rddplot(df = cross, y_var = "particip_prob", x_var = "biden_votes_share_2020_cd116", conditional = TRUE, jwidth = 0.0001, xlim = c(0.4,0.6), ylim = c(0,0.10), poly = 2, 
+        ylab = "Conditional Participation Probability", xlab="Democratic House Vote Share", alpha = 0.25)
+ggsave(file.path(figs, 'rddplot_prob_cbg_cd116.pdf'), width = 6, height = 5, device = cairo_pdf)
+rddplot(df = cross, y_var = "num_devices_diff_log_1m",   x_var = "biden_votes_share_2020_cd116", conditional = TRUE, jwidth = 0.0001, xlim = c(0.4,0.6), poly = 2, ylab = "Protesters (Log \U0394)",
+        alpha = 0.25,  xlab="Democratic House Vote Share")
+ggsave(file.path(figs, 'rddplot_num_cbg_cd116.pdf'), width = 6, height = 5, device = cairo_pdf)
+
+
+#### county
+cross[, particip_prob_county := sum(num_devices) / sum(number_devices_residing * (num_devices > 0)), by = "origin_county"]
+#cross[, particip_prob_county := sum(num_devices) / sum(number_devices_residing), by = "origin_county"]
+cross[num_devices > 0, num_devices_diff_log_1m_county := mean(num_devices_diff_log_1m, na.rm = TRUE),, by = "origin_county"]
+
+cross[, surge := mean(num_devices) , by = "origin_county"]
+
+
+rddplot(df = cross, y_var = "particip_prob_county",  x_var = "biden_votes_share_2020_cd116", conditional = TRUE, jwidth = 0.0001, xlim = c(0.4,0.6), size = 1.7, ylim = c(0,0.06), poly = 2, 
+        ylab = "Conditional Participation Probability", alpha = 0.25,  xlab="Democratic House Vote Share")
+ggsave(file.path(figs, 'rddplot_prob_county_cd116.pdf'), width = 6, height = 5, device = cairo_pdf)
+rddplot(df = cross, y_var = "num_devices_diff_log_1m_county",  x_var = "biden_votes_share_2020_cd116", conditional = TRUE, jwidth = 0.0001, xlim = c(0.4,0.6), poly = 2, 
+        ylab = "Protesters (Log \U0394)", alpha = 0.25,  xlab="Democratic House Vote Share")
+ggsave(file.path(figs, 'rddplot_num_county_cd116.pdf'), width = 6, height = 5, device = cairo_pdf)
+
+
+
+
+#### state
+cross[, particip_prob_state := sum(num_devices) / sum(number_devices_residing * (num_devices > 0)), by = "cd116"]
+cross[, extensive_state := mean(extensive, na.rm = TRUE), by = "state"]
+#cross[, particip_prob_state := sum(num_devices) / sum(number_devices_residing), by = "state"]
+cross[num_devices > 0, num_devices_diff_log_1m_state := mean(num_devices_diff_log_1m, na.rm = TRUE), by = "cd116"]
+
+rddplot(df = cross, y_var = "particip_prob_state",  x_var = "biden_votes_share_2020_cd116", conditional = TRUE, jwidth = 0.0001, 
+        xlim = c(0.4,0.6), ylim = c(0, 0.03), size = 2.5, poly = 2, ylab = "Conditional Participation Probability",  xlab="Democratic House Vote Share")
+ggsave(file.path(figs, 'rddplot_prob_state_cd116.pdf'), width = 6, height = 5, device = cairo_pdf)
+rddplot(df = cross, y_var = "num_devices_diff_log_1m_state",  x_var = "biden_votes_share_2020_cd116", conditional = FALSE, 
+        jwidth = 0.0001, xlim = c(0.4,0.6), ylim = c(2,4), size = 2, poly = 2, ylab = "Protesters (Log \U0394)",  xlab="Democratic House Vote Share")
+ggsave(file.path(figs, 'rddplot_num_state_cd116.pdf'), width = 6, height = 5, device = cairo_pdf)
+
+
+
+
+#### Tables
+
+
+#*****************************
+#### robust estimator 
+# NB: the conventional estimate of rdrobust does indeed overlap with the estimate produced by RDestimate
+
+## num_devices_log_diff
+
+
+#### reload data
+
+cross <- fread(file.path(dataOut, 'cross_rdd.csv'))
+
+
+cross[, biden_votes_share_2020_cd116 := 1 - trump_votes_share_2020_cd116]
+
+
+df_est <- na.omit(cross[pop > 0,c("extensive", "particip_prob", "num_devices_diff_log_1m",  "biden_votes_share_2020_cd116", "origin_county", "state")])
+
+
+#### prep table
+
+ests_conv <- "$\\tau$"
+ests_rob <- "Robust $\\tau$"
+ses_conv <- " "
+ses_rob <- " "
+nobs_eff_left <- "Effective N (L) "
+nobs_eff_right <- "Effective N (R)"
+bw_est <- "Bandwidth (Main)"
+bw_bias <- "Bandwidth (Bias)"
+mean_dv <- paste0("Outcome Mean & ", paste0(c(rep(roundS(mean(df_est$num_devices_diff_log_1m),4),3), rep(roundS(mean(df_est$particip_prob), 4),3)), collapse = "&"))
+
+h_mat <- c()
+b_mat <- c()
+
+#### estimate
+
+count <- 1
+for (var in c("num_devices_diff_log_1m", "particip_prob")) {
+  for (j in c(1,2,1/2)) {
+    if (j == 1) { # re-estimate bandwidth
+      # estimate model
+      mdl <- rdrobust::rdrobust(y = df_est[[var]], x = df_est$biden_votes_share_2020_cd116, c = 0.5, cluster = df_est$cd116, 
+                                masspoints = "adjust", bwcheck = 4) # just setting masspoints adjust option to low threshold cause code throws an error if I set it off
+      
+      # store estimated bandwidths
+      h <- mdl$bws[1,1]
+      b <- mdl$bws[2,1]
+      h_mat <- c(h_mat, h)
+      b_mat <- c(b_mat, b)
+    } else { # 
+      # estimate model using half or double of the estimated bandwiths 
+      mdl <- rdrobust::rdrobust(y = df_est[[var]], x = df_est$biden_votes_share_2020_cd116, c = 0.5, cluster = df_est$cd116, 
+                                masspoints = "adjust", bwcheck = 4, h = h*j, b = b*j)
+    }
+    
+    # code stars
+    star_conv <- paste0(roundS(mdl$Estimate[colnames(mdl$Estimate) == 'tau.us'], 4), "^{", pval_stars(mdl$pv[1]), "}") # helper function for non-scientific rounding
+    star_rob <- paste0(roundS(mdl$Estimate[colnames(mdl$Estimate) == 'tau.bc'], 4), "^{", pval_stars(mdl$pv[3]), "}")
+    
+    # assign estimation results to latex lines
+    assign(paste0("m", count), mdl) # assign model to name
+    ests_conv <- paste0(ests_conv, " & ",star_conv)
+    ses_conv <- paste0(ses_conv, " & (", roundS(mdl$Estimate[colnames(mdl$Estimate) == 'se.us'],4), ")")
+    ests_rob <- paste0(ests_rob, " & ", star_rob)
+    ses_rob <- paste0(ses_rob, " & (", roundS(mdl$Estimate[colnames(mdl$Estimate) == 'se.rb'], 4), ")")
+    nobs_eff_left <- paste0(nobs_eff_left, " & ", mdl$N_h[1])
+    nobs_eff_right <- paste0(nobs_eff_right, " & ", mdl$N_h[2])
+    bw_est <- paste0(bw_est, " & ", roundS(h * j,4))
+    bw_bias <- paste0(bw_bias, " & ", roundS(b * j,4))
+    
+    count <- count + 1
+  }
+}
+
+tab <- "\\begin{tabular}{lcccccc} \\tabularnewline\\midrule\\midrule  DV & \\multicolumn{3}{c}{Protesters (Log $\\Delta$)} & \\multicolumn{3}{c}{Particip. Prob.}  \\\\ 
+\\cmidrule(r){2-4} \\cmidrule(l){5-7} 
+& (BW) & (BW $\\times$ 2) & (BW $\\times$ 0.5) &  (BW) & (BW $\\times$ 2) & (BW $\\times$ 0.5) \\\\ \\hline \\\\ "
+
+cat(c(tab,
+      ests_conv, " \\\\ ", 
+      ses_conv, "\\\\ ", 
+      ests_rob, "\\\\ ",
+      ses_rob, "\\\\ \\\\ \\hline ", 
+      "\\multicolumn{7}{l}{ \\textsc{Statistics}} \\\\",
+      mean_dv, "\\\\",
+      nobs_eff_left, "\\\\ ",
+      nobs_eff_right,"\\\\ ",
+      bw_est, "\\\\ ",
+      bw_bias, "\\\\ \\midrule \\midrule 
+\\end{tabular}  "),  file = file.path(tabs, 'rdd_cd116.tex')
+)
+
+fwrite(data.table(h = h_mat, b = b_mat), file.path(dataOut, 'bws_cd116.csv'))
+
+
+
+
+#*****************************
+#### honest estimator
+
+df_bw <- fread(file.path(dataOut, 'bws_cd116.csv'))
+
+
+ests_num <- "\\multicolumn{7}{l}{\\textbf{Panel A:} Protesters (Log $\\Delta$)} \\\\ $\\tau$"
+ests_prob <- "\\multicolumn{7}{l}{\\textbf{Panel B:} Particip. Prob.} \\\\ $\\tau$"
+ses_num <- " "
+ses_prob <- " "
+nobs_eff_num <- "Effective N"
+nobs_eff_prob <- "Effective N"
+bw_est_num <- "Bandwidth (Main)"
+bw_est_prob <- "Bandwidth (Main)"
+
+
+mean_num <- paste0("Outcome Mean & ", paste0(c(rep(roundS(mean(df_est$num_devices_diff_log_1m),4),4)), collapse = "&"))
+mean_prob <- paste0("Outcome Mean & ", paste0(c(rep(roundS(mean(df_est$particip_prob), 4),4)), collapse = "&"))
+
+
+h <- df_bw$h[1]
+
+m_num <- c(0.01, 0.1, 1, 10)
+
+for (m in m_num) {
+  
+  mdl <- RDHonest::RDHonest(num_devices_diff_log_1m ~ biden_votes_share_2020_cd116, data = cross, cutoff = 0.5, h = h, M = m, clusterid = cd116)
+  
+  p_val <-   2*pnorm(abs(mdl$coefficients$estimate / mdl$coefficients$std.error), lower.tail=FALSE)
+  star_conv <- paste0(roundS(mdl$coefficients$estimate, 4), "^{", pval_stars(p_val), "}") # helper function for non-scientific rounding
+  ests_num <- paste0(ests_num, " & ",star_conv)
+  ses_num <- paste0(ses_num, " & (", roundS(mdl$coefficients$std.error,4), ")")
+  nobs_eff_num <- paste0(nobs_eff_num, " & ", roundS(mdl$coefficients$eff.obs,0))
+  bw_est_num <- paste0(bw_est_num, " & ", roundS(h,4))
+  
+}
+
+
+m_prob <- c(0.0001, 0.001, 0.01, 0.1)
+
+h <- df_bw$h[2]
+
+for (m in m_prob) {
+  
+  mdl <- RDHonest::RDHonest(particip_prob ~ biden_votes_share_2020_cd116, data = cross, cutoff = 0.5, h = h, M = m, clusterid = cd116)
+  
+  p_val <-   2*pnorm(abs(mdl$coefficients$estimate / mdl$coefficients$std.error), lower.tail=FALSE)
+  star_conv <- paste0(roundS(mdl$coefficients$estimate, 4), "^{", pval_stars(p_val), "}") # helper function for non-scientific rounding
+  ests_prob <- paste0(ests_prob, " & ",star_conv)
+  ses_prob <- paste0(ses_prob, " & (", roundS(mdl$coefficients$std.error,4), ")")
+  nobs_eff_prob <- paste0(nobs_eff_prob, " & ", roundS(mdl$coefficients$eff.obs,0))
+  bw_est_prob <- paste0(bw_est_prob, " & ", roundS(h,4))
+}
+
+
+tab <- "\\begin{tabular}{lcccc} \\tabularnewline\\midrule\\midrule  DV 
+& (1) & (2) & (3) &  (4)  \\\\ \\hline "
+
+cat(c(tab,
+      ests_num, " \\\\ ", 
+      ses_num, "\\\\ ", 
+      " \\hline",
+      paste0("M Bound &", paste0(m_num, collapse = "&")), "\\\\",
+      mean_num, "\\\\",
+      nobs_eff_num, "\\\\",
+      bw_est_num, "\\\\ \\hline",
+      ests_prob, " \\\\ ", 
+      ses_prob, "\\\\ ", 
+      " \\hline",
+      paste0("M Bound &", paste0(m_prob, collapse = "&")), "\\\\",
+      mean_prob, "\\\\",
+      nobs_eff_prob, "\\\\",
+      bw_est_prob, "\\\\ \\midrule \\midrule \\end{tabular}"),  
+    file = file.path(tabs, 'rdd_honest_cd116.tex')
+)
+
+
+
+
+
+#--------------------------------------s
+#### RDD for election night shift ####
+
+# note: when using county clusters and hc0-3 SEs, the results are not significant
+# but when using county clusters and nn or no clusters and hc0-hc3, they always are 
+
+#NB also try swing relative distance from 0.5 at midnight
+
+
+df_bw <- fread(file.path(dataOut, 'bws.csv'))
+cross <- fread(file.path(dataOut, 'cross_rdd.csv'))
+
+# scale particip_prob cause estimates are too small
+cross[, particip_prob := particip_prob * 100]
+
+#### prep table
+
+ests_conv <- "$\\tau$"
+ests_rob <- "Robust $\\tau$"
+ses_conv <- " "
+ses_rob <- " "
+nobs_eff_left <- "Effective N (L) "
+nobs_eff_right <- "Effective N (R)"
+bw_est <- "Bandwidth (Main)"
+bw_bias <- "Bandwidth (Bias)"
+mean_dv <- paste0("Outcome Mean & ", paste0(c(rep(roundS(mean(cross$num_devices_diff_log_1m),4),3), rep(roundS(mean(cross$particip_prob,na.rm=TRUE), 4),3)), collapse = "&"))
+
+h_mat <- c()
+b_mat <- c()
+
+#### estimate
+count <- 1
+for (var in c("num_devices_diff_log_1m", "particip_prob")) {
+  for (j in c(1,2,1/2)) {
+    if (j == 1) { # re-estimate bandwidth
+      # estimate model
+      mdl <- rdrobust::rdrobust(y = cross[[var]], x = -cross$repSwing_pp, c = 0, cluster = cross$origin_county, 
+                                masspoints = "adjust") 
+      
+      # store estimated bandwidths
+      h <- mdl$bws[1,1]
+      b <- mdl$bws[2,1]
+      h_mat <- c(h_mat, h)
+      b_mat <- c(b_mat, b)
+    } else { # 
+      # estimate model using half or double of the estimated bandwiths 
+      mdl <- rdrobust::rdrobust(y = cross[[var]], x = -cross$repSwing_pp, c = 0, cluster = cross$origin_county, 
+                                masspoints = "adjust",h = h*j, b = b*j) 
+    }
+    
+    # code stars
+    star_conv <- paste0(roundS(mdl$Estimate[colnames(mdl$Estimate) == 'tau.us'], 4), "^{", pval_stars(mdl$pv[1]), "}") # helper function for non-scientific rounding
+    star_rob <- paste0(roundS(mdl$Estimate[colnames(mdl$Estimate) == 'tau.bc'], 4), "^{", pval_stars(mdl$pv[3]), "}")
+    
+    # assign estimation results to latex lines
+    assign(paste0("m", count), mdl) # assign model to name
+    ests_conv <- paste0(ests_conv, " & ",star_conv)
+    ses_conv <- paste0(ses_conv, " & (", roundS(mdl$Estimate[colnames(mdl$Estimate) == 'se.us'],4), ")")
+    ests_rob <- paste0(ests_rob, " & ", star_rob)
+    ses_rob <- paste0(ses_rob, " & (", roundS(mdl$Estimate[colnames(mdl$Estimate) == 'se.rb'], 4), ")")
+    nobs_eff_left <- paste0(nobs_eff_left, " & ", mdl$N_h[1])
+    nobs_eff_right <- paste0(nobs_eff_right, " & ", mdl$N_h[2])
+    bw_est <- paste0(bw_est, " & ", roundS(h * j,4))
+    bw_bias <- paste0(bw_bias, " & ", roundS(b * j,4))
+    
+    count <- count + 1
+  }
+}
+
+tab <- "\\begin{tabular}{lcccccc} \\tabularnewline\\midrule\\midrule  DV & \\multicolumn{3}{c}{Protesters (Log $\\Delta$)} & \\multicolumn{3}{c}{Particip. Prob. $\\times$ 100}  \\\\ 
+\\cmidrule(r){2-4} \\cmidrule(l){5-7} 
+& (BW) & (BW $\\times$ 2) & (BW $\\times$ 0.5) &  (BW) & (BW $\\times$ 2) & (BW $\\times$ 0.5) \\\\ \\hline \\\\ "
+
+cat(c(tab,
+      ests_conv, " \\\\ ", 
+      ses_conv, "\\\\ ", 
+      ests_rob, "\\\\ ",
+      ses_rob, "\\\\ \\\\ \\hline ", 
+      "\\multicolumn{7}{l}{ \\textsc{Statistics}} \\\\",
+      mean_dv, "\\\\",
+      nobs_eff_left, "\\\\ ",
+      nobs_eff_right,"\\\\ ",
+      bw_est, "\\\\ ",
+      bw_bias, "\\\\ \\midrule \\midrule 
+\\end{tabular}  "),  file = file.path(tabs, 'rdd_swing.tex')
+)
+
+
+
+
+#### Continuity Plots #### 
+
+df_bw <- fread(file.path(dataOut, 'bws.csv'))
+cross <- fread(file.path(dataOut, 'cross_rdd.csv'))
+
+cross[, demSwing := -repSwing_pp]
+
+vars_labs <- c("pop" = "Population", "male" = "Male (%)", "race_w" = "White (%)", "race_b" = "Black (%)", "race_h" = "Hispanic (%)", "edu_highschool" = "High School (%)", 
+               "publicAssistance" = "Public Assist. (%)", "unemployed" = "Unemployed (%)", "distTo_ProudBoys" = "Dist. Proud Boys", "parler_count" = "# Parler Videos", 
+               "median_hh_inc" = "Median HH Income", "island_var" = "Island (Contin.)", "trump_share_votes" = "Trump CBG Vote Share (2016)")
+
+for (i in 1:length(vars_labs)) {
+  
+  var <- names(vars_labs)[i]
+  var_mean <- mean(cross[[var]], na.rm = TRUE)
+  var_sd <- sd(cross[[var]], na.rm = TRUE)
+  cross[, var_int := cross[[var]] ]
+
+  
+  ylim <- NULL
+  if (var == "pop") ylim <- c(0,15000)
+  if (var == "distTo_ProudBoys") ylim <- c(0, 1.5*10^6)
+  if (grepl("race", var)) ylim <- c(0, 1.5)
+  if (var == "parler_count") ylim <- c(0, 50)
+
+  rddplot(df = cross, y_var = var, ylab = vars_labs[i], x_var = "demSwing", conditional = FALSE, jwidth = 0.0001, 
+          xlim = c(-0.5,0.5),  poly = 2, alpha = 0.1, 
+          ylim = ylim, cutoff = 0, xlab = "Pro-Biden Election Night Swing")
+  fn <- file.path(figs, paste0('rdd_contin_cbg_repswing_', names(vars_labs)[i], ".pdf"))
+  ggsave(fn, width = 5, height = 4, device = cairo_pdf)
+  # R.utils::compressPDF(filename = fn, outFilename = fn, overwrite = TRUE,
+  #                      compression="gs(screen)+qpdf")
+}
+
+
+
+### covariate balance test
+vars <- names(vars_labs)
+
+p_vals_conv <- list()
+p_vals_rob <- list()
+# p_vals_hon <- list()
+cluster <- "origin_county"
+
+for (var in vars) { 
+  print(var)
+  keepvars <- c(var, "extensive", "particip_prob", "num_devices_diff_log_1m", 
+                "demSwing", "origin_county", "state")
+  df_est <- na.omit(cross[pop >0 ,..keepvars])
+  mdl <- rdrobust::rdrobust(y = df_est[[var]], x = df_est$demSwing, c = 0, cluster = df_est[[cluster]], 
+                            masspoints = "check", bwcheck = 4, vce="hc0")
+  summary(mdl)
+  
+  # mdl_h <- RDHonest::RDHonest(particip_prob ~ biden_share_votes_state_2020, data = df_est, cutoff = 0.5, h = h, M = m, 
+  #                           clusterid = get(cluster))
+  # 
+  # p_val <-   2*pnorm(abs(mdl_h$coefficients$estimate / mdl_h$coefficients$std.error), lower.tail=FALSE)
+  pv <- mdl$pv
+  p_vals_conv <- c(p_vals_conv, pv[rownames(pv) == "Conventional"])
+  p_vals_rob <- c(p_vals_rob, pv[rownames(pv) == "Robust"])
+  #p_vals_hon <- c(p_vals_hon, c(var = p_val))
+  
+}
+
+#names(p_vals_hon) <- vars
+test <- stats::p.adjust(p_vals_rob, 
+                        method = "holm")
+df <- data.table(test, vars_labs, unlist(p_vals_rob))
+colnames(df)[colnames(df) != "vars_labs"] <- paste0(colnames(df)[colnames(df) != "vars_labs"], "_swing")
+temp <- fread(file.path(dataOut, 'balance_test_rdd.csv'))
+df <- temp[df, on = "vars_labs"]
+fwrite(df, file.path(dataOut, 'balance_test_rdd_full.csv'))
+cols <- c( "V3", "test", "V3_swing", "test_swing")
+ordercols <- c("vars_labs",cols)
+df <- df[,..ordercols]
+df[,(cols) := round(.SD, 4), .SDcols = cols]
+colnames(df) <- c("Covariates", "P Vals.", "Corr. P Vals.", "P Vals.", "Corr. P Vals.")
+
+
+# Create LaTeX table with grouped columns
+latex_table <- df %>%
+  kableExtra::kable("latex", booktabs = TRUE) %>%
+  add_header_above(c("", "State RDD" = 2, "Election Night RDD" = 2))
+cat(latex_table, file = file.path(tabs, 'balance_test_rdd.tex'))
+
+#### RDD for election night shift: island difference plot ####
+
+
+df_bw <- fread(file.path(dataOut, 'bws.csv'))
+cross <- fread(file.path(dataOut, 'cross_rdd.csv'))
+
+cross[, fb_strength_ter := fb_strength <= quantile(fb_strength, 2/3, na.rm=TRUE)]
+
+cross[, demSwing := -repSwing_pp]
+
+### state discontinuity
+
+vars <- c("num_devices_diff_log_1m", "particip_prob")
+
+for (var in vars) {
+
+    for (island_var in c("island", "geo_island", "geo_island_mix")) {
+      estimates <- data.frame() # Create an empty data frame to store all estimates
+      for (island in c(1, 0)) {
+        for (bandwidth_adjust in c(1, 0.5, 2)) {
+          
+          # if ((bandwidth_adjust == 1) & (island_var == "island")) { 
+          #   # Compute the initial model to get the bandwidth
+          #   mdl <- rdrobust::rdrobust(y = cross[[var]], x = cross$biden_share_votes_state_2020, c = 0.5, cluster = cross$origin_county, 
+          #                             masspoints = "adjust",  bwcheck = 4) 
+          #   h <- mdl$bws[1,1]
+          #   b <- mdl$bws[2,1]
+          # } 
+          # Adjust the bandwidth
+          mdl <- rdrobust::rdrobust(y = cross[[var]], x = cross$biden_share_votes_state_2020, c = 0.5, cluster = cross$origin_county, 
+                                    masspoints = "adjust", subset = cross[[island_var]] == island, 
+                                    h = h * bandwidth_adjust, b = b * bandwidth_adjust,  bwcheck = 4) 
+  
+          conv <- roundS(mdl$Estimate[colnames(mdl$Estimate) == 'tau.us'], 4)
+          rob <- roundS(mdl$Estimate[colnames(mdl$Estimate) == 'tau.bc'], 4)
+          
+          ci_conv <- mdl$ci[1,]
+          ci_rob <- mdl$ci[3,]
+          
+          # Add estimates to the data frame
+          estimates <- rbind(estimates, data.frame(
+            category = rep(ifelse(island == 1, "Island (=1)", "Island (=0)"), each = 2),
+            estimate = as.numeric(c(conv, rob)),
+            ci_lower = as.numeric(c(ci_conv['CI Lower'], ci_rob['CI Lower'])),
+            ci_upper = as.numeric(c(ci_conv['CI Upper'], ci_rob['CI Upper'])),
+            type = rep(c("Conv.", "Robust"), 2),
+            bandwidth = rep(ifelse(bandwidth_adjust == 1, "(BW)", ifelse(bandwidth_adjust == 0.5, "(BW x 0.5)", "(BW x 2)")), each = 2)
+          ))
+        }
+      }
+      # plot the data
+      group.colors <- c("Island (=1)" = "red", "Island (=0)" = "blue")
+      p <- ggplot(estimates, aes(x = type, y = estimate, color = category, group = interaction(category, bandwidth))) +
+        geom_point(position = position_dodge(0.5), size = 3, alpha = 0.5) +
+        geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper), position = position_dodge(0.5), width = 0.2, alpha = 0.5) +
+        theme_minimal()  +
+        labs(x = "", y = "Point Estimate with 95% CI", color = "") + 
+        scale_color_manual(values=group.colors) + 
+        facet_wrap(~ bandwidth) +
+        expand_limits(y=0) + 
+        geom_hline(yintercept = 0, linetype = "dashed", color = "grey", alpha = 0.7) +
+        theme_classic() + 
+        theme(text=element_text(size=22,  family="LM Roman 10"), strip.background = element_blank(), 
+              strip.text.x = element_text(size = 24))   
+      ggsave(file.path(figs, paste0("rdd_repswing_state_", var, "_", island_var  ,".pdf")), width = 14, height = 6, device = cairo_pdf)
+  }
+
+}
+
+
+#### county discontinuity
+
+
+df_bw <- fread(file.path(dataOut, 'bws.csv'))
+cross <- fread(file.path(dataOut, 'cross_rdd.csv'))
+
+
+vars <- c("num_devices_diff_log_1m", "particip_prob")
+
+
+for (var in vars) {
+  for (island_var in c("island", "geo_island", "geo_island_mix")) {
+    estimates <- data.frame() # Create an empty data frame to store all estimates
+    for (island in c(1, 0)) {
+      for (bandwidth_adjust in c(1, 0.5, 2)) {
+        
+        if ((bandwidth_adjust == 1)) {
+          # Compute the initial model to get the bandwidth
+          mdl <- rdrobust::rdrobust(y = cross[[var]], x = -cross$repSwing_pp, c = 0, cluster = cross$origin_county,
+                                    masspoints = "adjust",  bwcheck = 4)
+          h <- mdl$bws[1,1]
+          b <- mdl$bws[2,1]
+        }
+        # Adjust the bandwidth
+        if (island == 1) subset <- cross$island %in% c(0,1) else subset <- cross[[island_var]] == island
+        mdl <- rdrobust::rdrobust(y = cross[[var]], x = -cross$repSwing_pp, c = 0, cluster = cross$origin_county, 
+                                  masspoints = "adjust", subset = subset, 
+                                  h = h * bandwidth_adjust, b = b * bandwidth_adjust,  bwcheck = 4) 
+        
+        conv <- mdl$Estimate[colnames(mdl$Estimate) == 'tau.us']
+        rob <- mdl$Estimate[colnames(mdl$Estimate) == 'tau.bc']
+        
+        ci_conv <- mdl$ci[1,]
+        ci_rob <- mdl$ci[3,]
+        
+        # Add estimates to the data frame
+        estimates <- rbind(estimates, data.frame(
+          category = rep(ifelse(island == 1, "Island (=1)", "Island (=0)"), each = 2),
+          estimate = as.numeric(c(conv, rob)),
+          ci_lower = as.numeric(c(ci_conv['CI Lower'], ci_rob['CI Lower'])),
+          ci_upper = as.numeric(c(ci_conv['CI Upper'], ci_rob['CI Upper'])),
+          type = rep(c("Conv.", "Robust"), 2),
+          bandwidth = rep(ifelse(bandwidth_adjust == 1, "(BW)", ifelse(bandwidth_adjust == 0.5, "(BW x 0.5)", "(BW x 2)")), each = 2)
+        ))
+      }
+    }
+    # plot the data
+    group.colors <- c("Island (=1)" = "red", "Island (=0)" = "blue")
+    p <- ggplot(estimates, aes(x = type, y = estimate, color = category, group = interaction(category, bandwidth))) +
+      geom_point(position = position_dodge(0.5), size = 3, alpha = 0.5) +
+      geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper), position = position_dodge(0.5), width = 0.2, alpha = 0.5) +
+      theme_minimal()  +
+      labs(x = "", y = "Point Estimate with 95% CI", color = "") + 
+      scale_color_manual(values=group.colors) + 
+      facet_wrap(~ bandwidth) +
+      expand_limits(y=0) + 
+      geom_hline(yintercept = 0, linetype = "dashed", color = "grey", alpha = 0.7) +
+      theme_classic() + 
+      theme(text=element_text(size=22,  family="LM Roman 10"), strip.background = element_blank(), 
+            strip.text.x = element_text(size = 24))   
+    ggsave(file.path(figs, paste0("rdd_repswing_", var, "_", island_var  ,".pdf")), width = 14, height = 6, device = cairo_pdf)
+  }
+  
+}
+
+
+
+### zip code level
+
+cross <- fread(file.path(dataOut, 'cross_regression_zip.csv'))
+
+
+cross <- cross[pop > 0]
+
+# create some variable
+
+
+cross[, particip_prob := num_devices  / number_devices_residing]
+cross[, surge := (num_devices_adj - num_devices_adj.avg1m) / number_devices_residing]
+
+cross <- cross[state != 11] # drop dc
+
+cross[, extensive := as.numeric(num_devices > 0)]
+cross[, origin_county := as.numeric(origin_county)]
+
+#cross[, D := as.numeric(biden_share_votes_state_2020 > 0.5)]
+#cross[, island_2020 := as.numeric(trump_neighbor_2020 < trump_share_votes_2020)]
+
+cross[, num_devices_diff_log_1m := log(1+num_devices_adj) - log(1+num_devices_adj.avg1m)]
+
+
+cross[, fb_strength_ter := strength <= quantile(strength, 2/3, na.rm=TRUE)]
+
+
+fwrite(cross, file.path(dataOut, 'cross_rdd_zip.csv'))
+
+
+
+vars <- c("num_devices_diff_log_1m", "particip_prob")
+
+
+for (var in vars) {
+  for (island_var in c("fb_strength_ter")) {
+    estimates <- data.frame() # Create an empty data frame to store all estimates
+    for (island in c(1, 0)) {
+      for (bandwidth_adjust in c(1, 0.5, 2)) {
+        
+        if ((bandwidth_adjust == 1)) {
+          # Compute the initial model to get the bandwidth
+          mdl <- rdrobust::rdrobust(y = cross[[var]], x = -cross$repSwing_pp, c = 0,
+                                    masspoints = "adjust",  bwcheck = 4)
+          h <- mdl$bws[1,1]
+          b <- mdl$bws[2,1]
+        }
+        # Adjust the bandwidth
+        subset <- cross[[island_var]] == island
+        mdl <- rdrobust::rdrobust(y = cross[[var]], x = -cross$repSwing_pp, c = 0, 
+                                  masspoints = "adjust", subset = subset, 
+                                  h = h * bandwidth_adjust, b = b * bandwidth_adjust,  bwcheck = 4) 
+        
+        conv <- mdl$Estimate[colnames(mdl$Estimate) == 'tau.us']
+        rob <- mdl$Estimate[colnames(mdl$Estimate) == 'tau.bc']
+        
+        ci_conv <- mdl$ci[1,]
+        ci_rob <- mdl$ci[3,]
+        
+        se_conv <- mdl$se[1]
+        se_rob <- mdl$se[3]
+        
+        # Add estimates to the data frame
+        estimates <- rbind(estimates, data.frame(
+          category = rep(ifelse(island == 1, "Island (=1)", "Island (=0)"), each = 2),
+          estimate = as.numeric(c(conv, rob)),
+          ci_lower = as.numeric(c(ci_conv['CI Lower'], ci_rob['CI Lower'])),
+          ci_upper = as.numeric(c(ci_conv['CI Upper'], ci_rob['CI Upper'])),
+          type = rep(c("Conv.", "Robust"), 2),
+          se = as.numeric(c(se_conv, se_rob)),
+          bandwidth = rep(ifelse(bandwidth_adjust == 1, "(BW)", ifelse(bandwidth_adjust == 0.5, "(BW x 0.5)", "(BW x 2)")), each = 2)
+        ))
+      }
+    }
+    # plot the data
+    group.colors <- c("Island (=1)" = "red", "Island (=0)" = "blue")
+    p <- ggplot(estimates, aes(x = type, y = estimate, color = category, group = interaction(category, bandwidth))) +
+      geom_point(position = position_dodge(0.5), size = 3, alpha = 0.5) +
+      geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper), position = position_dodge(0.5), width = 0.2, alpha = 0.5) +
+      theme_minimal()  +
+      labs(x = "", y = "Point Estimate with 95% CI", color = "") + 
+      scale_color_manual(values=group.colors) + 
+      facet_wrap(~ bandwidth) +
+      expand_limits(y=0) + 
+      geom_hline(yintercept = 0, linetype = "dashed", color = "grey", alpha = 0.7) +
+      theme_classic() + 
+      theme(text=element_text(size=22,  family="LM Roman 10"), strip.background = element_blank(), 
+            strip.text.x = element_text(size = 24))   
+    ggsave(file.path(figs, paste0("rdd_repswing_", var, "_", island_var  ,".pdf")), width = 14, height = 6, device = cairo_pdf)
+  }
+  
+}
+
+
+
+
+
+
+
+
+#### RDD for election night shift: discontinuity plots ####
+
+## RDD plots
+df_bw <- fread(file.path(dataOut, 'bws.csv'))
+cross <- fread(file.path(dataOut, 'cross_rdd_zip.csv'))
+cross[, demSwing := - repSwing_pp]
+
+df = cross
+
+
+df <- cross[!state %in% c(24,51)] # drop dc, maryland and virginia
+
+#### cbg
+x_var = "demSwing"
+xlab = "Pro-Biden Election Night Swing"
+
+
+
+p <- rddplot(df = df, y_var = "particip_prob", x_var = x_var,
+        conditional = TRUE, jwidth = 0.0001, xlim = c(-0.5,0.5), ylim = c(0,0.05), poly = 2, cutoff = 0,
+        ylab = "Conditional Participation Probability", alpha = 0.25, xlab = xlab)
+ggsave(file.path(figs, 'rddplot_swing_prob_cbg.pdf'), width = 6, height = 5, device = cairo_pdf)
+
+p <- rddplot(df = df, y_var = "num_devices_diff_log_1m", x_var = x_var,
+        conditional = TRUE, jwidth = 0.0001, xlim = c(-0.5,0.5), poly = 2, cutoff = 0,
+        ylab = "Protesters (Log \U0394)", alpha = 0.25, xlab = xlab)
+ggsave(file.path(figs, 'rddplot_swing_num_cbg.pdf'), width = 6, height = 5, device = cairo_pdf)
+
+
+#### county
+df[, particip_prob_county := sum(num_devices) / sum(number_devices_residing * (num_devices > 0)), by = "origin_county"]
+#cross[, particip_prob_county := sum(num_devices) / sum(number_devices_residing), by = "origin_county"]
+df[num_devices > 0, num_devices_diff_log_1m_county := mean(num_devices_diff_log_1m, na.rm = TRUE), by = "origin_county"]
+
+df[, surge := mean(num_devices) , by = "origin_county"]
+
+p <- rddplot(df = df, y_var = "particip_prob_county", x_var = x_var,
+        conditional = TRUE, jwidth = 0.0001, xlim = c(-0.5,0.5), ylim = c(0,0.05), poly = 2, cutoff = 0,
+        ylab = "Conditional Participation Probability", alpha = 0.25, xlab = xlab)
+ggsave(file.path(figs, 'rddplot_swing_prob_county.pdf'), width = 6, height = 5, device = cairo_pdf)
+
+
+
+p <- rddplot(df = df, y_var = "num_devices_diff_log_1m_county", x_var = x_var,
+        conditional = TRUE, jwidth = 0.0001, xlim = c(-0.5,0.5), poly = 2, cutoff = 0,
+        ylab = "Protesters (Log \U0394)", alpha = 0.25, xlab = xlab)
+ggsave(file.path(figs, 'rddplot_swing_num_county.pdf'), width = 6, height = 5, device = cairo_pdf)
+
+
+
+
+
+
+#####*****************************************************************************#####
+####  NETWORK ANALYSIS ####
+#####*****************************************************************************#####
+
+# https://github.com/yong-cai/WCR
+
+
+
+#####*****************************************************************************#####
+####  NEWS STUFF ####
+#####*****************************************************************************#####
+    
+
+news <- fread(file = file.path(dataIn, 'news', 'articles_subset.csv'))
+
+
+#### calculate sentiment scores #### 
+
+
+# vectorize assign, get and exists for convenience
+
+
+
+news <- news[!duplicated(news[,c("source", "location", "headline", "date")])]
+news[, c("vader_hash", "lex_pos", "lex_neg") := as.character(NA)]
+news[, c("vader", "lexicoder", "corenlp", "word_count") := as.numeric(NA)]
+
+setwd( '/home/antonvocalis/stanford-corenlp-latest/stanford-corenlp-4.3.2') # for corenlp
+
+
+# set up cluster for parallelization
+n.cores <- parallel::detectCores() - 2
+my.cluster <- parallel::makeCluster(
+  n.cores, 
+  type = "PSOCK", 
+  outfile=""
+)
+#register it to be used by %dopar%
+doParallel::registerDoParallel(cl = my.cluster)
+
+#check if it is registered (optional)
+foreach::getDoParRegistered()
+
+# progress bar
+registerDoSNOW(my.cluster)
+progress <- function(n) pb$tick()
+opts <- list(progress = progress)
+
+rewrite <- TRUE # recalculate news sentiment from scratch?
+if (rewrite) {
+  # write empty data table to append to
+  df <- data.table(headline = as.character(NA), vader = NA, vader_hash = as.character(NA), word_count = NA, 
+                   bing = NA, afinn = NA, lexicoder = NA, lex_pos = as.character(NA), lex_neg = as.character(NA))
+  fwrite(df, file.path(dataBy, 'news_sentiment.csv'), sep ="\t")
+
+} else {
+  df <- fread(file.path(dataBy, 'news_sentiment.csv'), sep ="\t") # TODO: read news_sentiment to loop only over headlines without sentiment calcualted
+}
+
+
+pb <- progress_bar$new(total=uniqueN(news[!headline %in% df$headline]$headline), format = "  analyzing sentiment [:bar] :percent eta: :eta",)
+
+#spacy_install()
+spacy_initialize()
+
+output <- foreach (line = unique(news[!headline %in% df$headline]$headline), .options.snow = opts, .packages = c("data.table", "spacyr")) %dopar% {
+  
+  #print(line)
+
+  
+  #pb$tick()
+  
+  tryCatch({
+  
+  # news[headline == line, vader := df$compound]
+  # news[headline == line, vader_hash := word_dict]
+  # news[headline == line, word_count := wordcount]
+
+  line_parsed <- spacy_parse(line)
+  line_parsed <- with(line_parsed, subset(token, pos != "PROPN"))
+  tokens <- quanteda::tokens(line_parsed, remove_symbols = TRUE, remove_punct = TRUE, remove_url = TRUE, remove_numbers = TRUE)
+  tokens <- quanteda::tokens_tolower(tokens)
+  tokens <- quanteda::tokens_remove(tokens, pattern = quanteda::stopwords("english"))
+
+  
+  sentence <- paste(tokens, collapse = " ")
+  vctr <- unlist(tokens)
+
+  
+  # lexicoder
+  lex <- quanteda::tokens_lookup(tokens, dictionary = quanteda::data_dictionary_LSD2015, exclusive = FALSE)
+  
+  wordcount <- length(unlist(lex))
+  net_sent <- (sum(lex %like% "POSITIVE") - sum(lex %like% "NEGATIVE")) / wordcount
+  #news[headline == line, lexicoder := net_sent]
+
+  neg_words <-  paste(unname(unlist(tokens)[which(lex %like% "NEGATIVE")]), collapse = ",")
+  pos_words <-  paste(unname(unlist(tokens)[which(lex %like% "POSITIVE")]), collapse = ",")
+  #print(c(pos_words, neg_words))
+  if (length(pos_words) == 0) pos_words <- as.character(NA)
+  if (length(neg_words) == 0) neg_words <- as.character(NA)
+  # news[headline == line, lex_pos := pos_words]
+  # news[headline == line, lex_neg := neg_words]
+  
+  
+  # vader
+  df <- vader::vader_df(sentence, rm_qm = TRUE)
+  word_bag <- wordsPlusEmo(paste(tokens, collapse = " "))
+  word_bag <- word_bag[word_bag != ""]
+  word_score <- as.numeric(unlist(strsplit(gsub("\\{|\\}", "", df$word_scores), ", ")))
+  word_dict <- compoundList(setNames(word_score, word_bag))
+  word_dict <- word_dict[word_dict != 0]
+  if (length(word_dict) == 0) {
+    word_dict <- as.character(NA)
+  } else {
+    word_dict <- paste(names(word_dict), word_dict, sep = "=", collapse = ";")
+  }
+  
+  
+  # bing
+  bing <- syuzhet::get_sentiment(vctr, method = "bing")
+  
+  # afinn
+  afinn <- syuzhet::get_sentiment(vctr, method = "afinn")
+  
+  ## core nlp
+  #stan <- syuzhet::get_sentiment(line, method = "stanford", path_to_tagger = '/home/antonvocalis/stanford-corenlp-latest/stanford-corenlp-4.3.2')
+
+  # news[headline == line, corenlp := stan]
+  
+  #
+
+  df_out <- data.frame(headline = line, vader = mean(df$compound, na.rm = TRUE), vader_hash = word_dict, word_count = wordcount, 
+             bing = mean(bing, na.rm = TRUE), afinn = mean(afinn, na.rm = TRUE), lexicoder = net_sent, lex_pos = pos_words, lex_neg = neg_words)
+
+  },
+  error = function(cond) {
+    print("error")
+    df_out <- data.frame(headline = line, vader = NA, vader_hash = as.character(NA), word_count = NA,
+               corenlp = NA, lexicoder = NA, lex_pos = as.character(NA), lex_neg = as.character(NA), bing = NA, afinn = NA)
+  }
+  )
+  
+  tryCatch({
+  fwrite(df_out, file.path(dataBy, 'news_sentiment.csv'), append = TRUE, sep = "\t")
+  }, 
+  error = function(cond){
+    
+  })
+}
+
+
+parallel::stopCluster(cl = my.cluster)
+  
+
+
+
+#### sentiment analysis #### 
+
+#### merge sentiment and headlines data
+sent <- fread(file.path(dataBy, 'news_sentiment.csv'), sep = "\t")
+
+news <- fread(file = file.path(dataIn, 'news', 'articles_subset.csv'))
+news <- news[!duplicated(news[,c("source", "location", "headline", "date")])]
+
+news <- sent[news, on = "headline"]
+
+
+news <- news[location != "USA"]
+
+#news <- news[any(tolower(location) %like% tolower(state.abb))] # keep only properly local news
+news <- news[type == "N"] # keep only proper newspapers
+
+unc <- readxl::read_excel(file.path(dataIn, 'news', 'UNCNewspaperDatabase_12_17_20.xlsx')) %>% setDT()
+
+# clear up source names
+news[grepl(",", source), source := paste0(sub(".*, ", "", source), " ",  sub(",.*", "", source))]
+news[, source := trimws(gsub("The", "", source), which = "both")]
+unc[, source := trimws(gsub("The", "", newspaper_name), which = "both")]
+news[, source := gsub("&", "and", source)]
+# unc[, source := gsub("&", "and", source)]
+news[, source := gsub("-", " ", source)]
+unc[, source := gsub("-", " ", source)]
+news[, source := tolower(source)]
+unc[, source := tolower(source)]
+
+# remove local AP news
+news <- news[!source %like% "associated press"]
+
+news <- news[headline != "News Article"]
+
+
+# code counties of newspapers
+source("15_matchNewsCounties.R")
+df <- data.table(location = names(location_fips), fips_county = unlist(location_fips))
+
+news <- df[news, on = "location"]
+news[, fips := as.numeric(substr(fips_county, 1,2))]
+news[, origin_county := as.numeric(fips_county)]
+
+aggvar <- "origin_county"
+
+#### some first tries
+news[, date := as.Date(date, format = "%B %d, %Y")]
+news_state_pre <- news[date <= as.Date("2020-11-03"), .(newsN_pre = uniqueN(headline) / uniqueN(date), #count
+                                                        vader_pre = mean(vader, na.rm = TRUE), # vader
+                                                        bing_pre = mean(bing, na.rm = TRUE), # bing
+                                                        afinn_pre = mean(afinn, na.rm = TRUE), # afinn
+                                                        lexi_pre = mean(lexicoder, na.rm = TRUE) # lexicoder
+                                                        ), by = c(aggvar)]
+news_state_post <- news[( date %between% as.Date(c("2020-11-07", "2021-01-05"))), .(newsN_post = uniqueN(headline) / uniqueN(date), #count
+                                                        vader_post = mean(vader, na.rm = TRUE), # vader
+                                                        bing_post = mean(bing, na.rm = TRUE), # bing
+                                                        afinn_post = mean(afinn, na.rm = TRUE), # afinn
+                                                        lexi_post = mean(lexicoder, na.rm = TRUE) # lexicoder
+                                                        ), by = c(aggvar)]
+
+
+cross <- fread(file.path(dataOut, 'cross_rdd.csv'))
+setnames(cross, "state", "fips")
+cross <- news_state_pre[cross, on = aggvar]
+cross <- news_state_post[cross, on = aggvar]
+
+cross[, pop_state := sum(pop, na.rm = TRUE), by = aggvar]
+cross[, newsN_post := newsN_post / pop_state]
+cross[, newsN_pre := newsN_pre / pop_state]
+
+
+for (j in c("newsN", "vader", "bing", "afinn", "lexi")) { # calculate difference between sentiment in week before insurrection & week before election
+  nam_pre <- paste0(j, "_pre")
+  nam_post <- paste0(j, "_post")
+  cross[, (paste0(j, "_delta")) := (get(nam_post) - get(nam_pre)) / get(nam_pre)]
+}
+
+temp <- cross[!is.infinite(vader_delta)]
+mdl <- fixest::feols(num_devices_diff_log_1m ~ trump_share_votes_2020*island 
+                     + log(1+parler_count) +
+                       race_w + race_h + edu_highschool +median_hh_inc + log(distTo_ProudBoys) | origin_county , cluster = "origin_county", data = cross)
+summary(mdl)
+
+cross[, particip_prob_state := sum(num_devices) / sum(number_devices_residing * (num_devices > 0)), by = "fips"]
+
+
+# RDD plots
+# significant difference in number of articles in counties that went to Trump (newsN_post)
+rddplot(df = cross, y_var = "newsN_delta", x_var = c("biden_share_votes_state_2020"), conditional = FALSE, jwidth = 0.0001, 
+        xlim = c(0.3,0.7), cutoff = 0.5, size = 1.7, poly = 2, ylab = "Election Fraud News Sentiment (% Change)", alpha = 0.25) # this is a user-written function
+
+rddplot(df = cross, y_var = "lexi_post", x_var = c("biden_share_votes_county_2020"), conditional = FALSE, jwidth = 0.0001, 
+        xlim = c(0.3,0.7), cutoff = 0.5, size = 1.7, poly = 2, ylab = "Election Fraud News Sentiment (% Change)", alpha = 0.25) # this is a user-written function
+
+
+
+rddplot(df = cross, y_var = "particip_prob", x_var = "vader_delta", conditional = FALSE, jwidth = 0.0001,  size = 1.7, poly = 2, 
+        ylab = "Election Fraud News (% Change)", alpha = 0.25) # this is a user-written function
+
+rddplot(df = cross, y_var = "bing_delta", conditional = FALSE, jwidth = 0.0001, xlim = c(0.3,0.7), size = 1.7, poly = 2, 
+        ylab = "Election Fraud News: Sentiment (% Change)", alpha = 0.25)
+
+
+# RDD estimation
+var <- "afinn_delta"
+df_est <- cross[!is.na(lexi_post)]
+df_est[, bing_post := bing_post - min(bing_post, na.rm = TRUE)]
+mdl <- rdrobust::rdrobust(y = df_est$bing_post, x = df_est$biden_share_votes_county_2020, c = 0.5) #
+summary(mdl)
+
+news[, av_sent := mean(compound, na.rm = TRUE), by = c("fips", "date")]
+test <- news[fips == 42]
+ggplot(test, aes(x = date, y = av_sent)) + geom_line()
+
+
+
+# plot time series
+aggvar <- "date"
+
+ts <- news[, .(newsN_pre = uniqueN(headline) / uniqueN(date), #count
+              vader_pre = mean(vader, na.rm = TRUE), # vader
+              bing_pre = mean(bing, na.rm = TRUE), # bing
+              afinn_pre = mean(afinn, na.rm = TRUE), # afinn
+              lexi_pre = mean(lexicoder, na.rm = TRUE) # lexicoder
+            ), by = c(aggvar)]
+
+
+ggplot(ts[date > as.Date("2020-10-15")], aes(x = date, y = bing_pre)) + 
+  geom_line() +
+  labs(x = "Date", y = "Vader P", title = "Time series of Vader Pre") +
+  geom_vline(xintercept = as.Date("2020-11-07"), color = "red") +
+  theme_minimal()
+
+#### 
+
+
+unc[grepl(", ", source), source := sub(",.*", "", source)]
+
+summary(unique(news$source) %in% unc$source)
+summary(unc$source %in% news$source)
+
+news[, state := trimws(sub('.*\\,', '', location))]
+
+news[, source_state := paste0(source, state)]
+unc[, source_state := paste0(source, state)]
+
+summary(unc$source_state %in% news$source_state)
+unc[, matched := as.numeric(source_state %in% news$source_state)]
+
+
+
+summary(news)
+
+unc_match <- unc[source %in% news$source]
+unc_match[duplicated(source)]$source
+
+View(unique(news[! source %in% unc$source]$location))
+
+unc[source %like% "ann arbor"]$source
+
+summary(unique(news[headline != "News Article"]$source) %in% unc[total_circulation > 1000]$source)
+
+summary(unc[total_circulation > 10000]$source %in% news$source)
+
+
+unc[, missing := as.numeric(source %in% news$source)]
+unc[, missing_perc := sum(as.numeric(missing), na.rm = TRUE) / uniqueN(source), by=  "county"]
+
+
+
+
+
+

@@ -1,0 +1,271 @@
+#********************************************************************************************************************************
+#=== MULTIPLE REGRESSION ====
+#********************************************************************************************************************************
+
+rm(list = setdiff(ls(), "cutoff"))
+source("000_master.R")
+dfReg <- fread(file.path(data_by, "dat_ready_regression.csv.gz"))
+dfReg <- fread(file.path('Users/332052/Desktop', "dat_ready_regression.csv.gz"), nrow = 1)
+
+
+# prep some variables some more
+dfReg[,postCovid := as.numeric(weeksAfterWHO >= 0)] # post-covid dummy
+dfReg[, group_dummy := as.numeric(n_companies > 0)]
+#dfReg <- dfReg[listed == FALSE]
+dfReg[, credit_score := credit_score / 100]
+
+vars_factor <- c("companyCity", "month_sic", "week_sic", "week_nuts")
+dfReg[, (vars_factor) := lapply(.SD, factor), .SDcols = vars_factor]
+
+## baseline regression 
+fmla <- as.formula("stockReg ~ postCovid | companyCity + month_sic")
+
+model_base <- fixest::feols(fmla,  dfReg[ds <= "2020-05-10"])
+#stats_base <- summary(model_base)
+
+
+
+
+
+## interacted regression -- TODO: 
+
+#dfReg$company_name <- factor(dfReg$company_name)
+#dfReg[[region_var]] <- factor(dfReg[[region_var]])
+# dfReg$weeksAfterWHO_old <- factor(dfReg$weeksAfterWHO_old) 
+# dfReg$sic1_2digits <- factor(dfReg$sic1_2digits)
+
+# NB ratios and factors not in logs
+
+vars_firm <- c("assets_log", "leverage", "cash",
+               "credit_score", "age", # "listed", 
+                "market_share", "group_dummy")
+vars_control <- c(#"unemp", "inactive",  "furlough", 
+                  #"covid_cases_log", "covid_deaths_log"
+                  # "imports_sic2_log", "exports_sic2_log", 
+                  # "home", 
+                  # "nqf_2"
+                  )
+
+vars <- c(vars_firm) # no vars_control since they are absorbed by the fixed effects
+
+vars[!vars %in% colnames(dfReg)] # check that variable names are in data
+round(sort(sapply(c(vars), function(x) mean(is.na(dfReg[[x]])))), 2) # proportion of missings
+
+# correlation matrix
+cor_mat <- cor(dfReg[,..vars], use = "complete.obs")
+pdf(file.path(figs, "cor_matrix.pdf"), height = 8, width = 8)
+heatmap(cor_mat, Rowv = NA, Colv = NA, scale = "none", margins = c(8,8))
+dev.off()
+rm(cor_mat)
+
+
+form_vars_firm <- paste0("postCovid:", vars_firm, collapse = " + ")
+main_effects <- paste(vars_control, collapse = " + ")
+predictors <- paste(main_effects, form_vars_firm, sep = " + ")
+
+# model 1
+suffix <- "week_sic + companyCity + month_sic"
+fmla <- as.formula(paste0("stockReg ~ ", predictors, " | ", suffix))
+model1 <- fixest::feols(fmla, dfReg[ds <= "2020-05-10" & consolidated != "Consolidated"], cluster = c("companyCity")) #
+#stats_model1 <- summary(model1)
+
+# model 2
+suffix <- "week_sic + companyCity + week_nuts + month_sic"
+fmla <- as.formula(paste0("stockReg ~ ", predictors, " | ", suffix))
+model2 <- fixest::feols(fmla, dfReg[ds <= "2020-05-10" & consolidated != "Consolidated"], cluster = "companyCity") #
+#stats_model2 <- summary(model2)
+
+
+## To LaTeX And Beyond! 
+
+# code up nice variable names
+dict <- c("assets_log" = "Log(1+assets)",
+          "leverage" = "Leverage / assets", 
+          "cash" = "Cash / assets", 
+          "n_subsidiaries" = "No of subsidiaries",
+          "n_companies" = "No of firms in corporate group",
+          "credit_score" = "Credit score", 
+          "age" = "Age", 
+          #"listed" = "Listed",
+          "market_share" = "Market share (assets)",
+          "labor_share" = "Market share (employees)",
+          "group_dummy" = "Corporate group (=1)",
+          "stockReg" = "Log(1+vacancy stock)", 
+          "postCovid" = "Post WHO",
+          "companyCity" = "Firm-NUTS2",
+          "month_sic" = "Month of year x SIC", 
+          "week_sic" = "Week x SIC",
+          "week_nuts" = "Week x NUTS2"
+)
+fixest::setFixest_dict(dict)
+
+
+# number of clusters
+my_fun = function(x)  attr(x$cov.scaled, "G")
+fitstat_register("clstrs", my_fun, "Clusters")
+
+dfReg[, countInd := .N, by = c("sic", "weeksAfterWHO")]
+mean(dfReg[!is.na(assets)]$countind > 5, na.rm = TRUE) # note that 99.8% of 5-digit sics have more than 5 firms in them
+
+etable(model_base, model1, model2, fitstat = ~ n + my + clstrs + ar2, 
+            tex = TRUE, notes = "All models are balanced panel regressions based on Eq. 
+            \\ref{eq:WHO_interact}, controlling for increasingly stringent 
+            fixed effects, where SIC indicates the firm's 5-digit SIC industry. The sample period goes from March 1, 2019 to May 10, 2020, the date of the first easing 
+            of the first national lockdown.
+            The outcome variable is the logarithm of a firm's vacancy stocks on a given week within a given NUTS-2 region. 
+            Model (2) and (3) are estimated only for firms with unconsolidated balance sheets.
+            Covariates are as follows, where firm variables are common across regional branches of the same firm, and are measured from 2019 filings:
+            \\textit{Post WHO} dummy that is 1 after March 11, the date the WHO declared COVID-19 a global pandemic;
+            \\textit{Log(1+assets)}: log of total assets + 1; 
+            \\textit{Leverage / assets}: current liabilities / total assets; 
+            \\textit{Cash / assets}: bank and deposits / total assets of firm;
+            \\textit{Age}: years since firm's incorporation;
+            \\textit{Market share (assets)}: share of firm's total assets in total assets of all firms in 5-digit SIC industry;
+            \\textit{Market share (employees)}: share of firm's employees in total employees of all firms in 5-digit SIC industry.
+            \\textit{Corporate group (=1)}: dummy for whether the firm is part of a corporate group.",
+            file = file.path(tabs, "multiple_reg.tex"), replace = TRUE)
+            
+
+# \\textit{Listed}: dummy for whether firm is publicly listed;
+
+rm(model_base, model1, model2)
+
+
+
+
+#********************************************************************************************************************************
+#=== TIME EVOLUTIONS ====
+#********************************************************************************************************************************
+
+#************** PARAMETERS (referred to with @ in comments) *****************
+
+pre = 5 # how many weeks prior to pandemic announcement
+post = NULL # how many weeks after -- "NULL" if up to present, otherwise number of weeks
+
+#****************************************************************************
+
+#************** BASELINE REGRESSION *******************************
+
+
+splitvars <- c("assets_log", "leverage", "cash", "credit_score", "market_share", "labor_share")
+
+# Baseline plot
+#fmla <- as.formula("postingsReg ~ factor(weeksAfterWHO) | companyCity + month" )
+
+
+fmla <- as.formula("stockReg ~ factor(weeksPreCombined)  | month_sic + month_nuts + companyCity" )
+# model_baseline <- felm(fmla, dfReg)
+# plotDD(model_baseline, fn = "regression_time_trends/time_base.pdf", xlab = "Week period relative to WHO Declaration")
+
+
+
+#************** INTERACTED REGRESSIONS *******************************
+#splitvars <- vars_firm
+for (splitvar in splitvars) { # loop through interaction terms
+  print(splitvar)
+  cutoff <- median(dfReg[[splitvar]], na.rm = TRUE)
+  
+  count <- 1
+  for (dfSplit in list(dfReg[consolidated != "Consolidated" & dfReg[[splitvar]] > cutoff],
+                       dfReg[consolidated != "Consolidated" & dfReg[[splitvar]] <= cutoff])) { 
+    cat(".")
+    if (count == 1) { 
+      
+      model <- fixest::feols(fmla, data = dfSplit, cluster = "companyCity")
+      p <- plotDD(model, remove_last = T,
+                  color = "gray20", xlab = "Week relative to WHO Declaration")[2]
+    } else {
+      
+      model <- fixest::feols(fmla, data = dfSplit, cluster = "companyCity")
+      p <- plotDD(model, remove_last = T,
+                  color = "gray70", 
+                  fn = str_c("regression_time_trends/time_", gsub(" ", "",splitvar), ".pdf"), 
+                  p = p)[2]
+    }
+    count <- count + 1
+    rm(model)
+  }
+}
+
+
+
+#********************************************************************************************************************************
+#=== LASSO ====
+#********************************************************************************************************************************
+vars_demean <- c(vars, "stockReg")
+vars_use <- c(vars_demean, "postCovid", "month_sic", "companyCity") 
+dfReg_demeaned <- na.omit(dfReg[dfReg$ds <= "2020-06-30", ..vars_use ])
+
+# evaluate number of missings
+tt <- data.frame(dfReg[dfReg$ds <= "2020-06-30",])[, c("postCovid", vars_demean)]
+all_miss <- apply(tt, 2, function(x) mean(is.na(x)))
+pre_miss <- apply(tt[tt$postCovid ==0, ], 2, function(x) mean(is.na(x)))
+post_miss <- apply(tt[tt$postCovid ==1, ], 2, function(x) mean(is.na(x)))
+round(post_miss - pre_miss, 4)
+
+
+# create interaction variables
+# demean all variables
+demeaned = fixest::demean(X = dfReg_demeaned[, ..vars_control],
+                          f = dfReg_demeaned[, c("companyCity", "month_sic")])
+
+colnames(demeaned)[which(apply(demeaned, 2, var) > 0.0001)] # check variance in demeaned variables
+colnames(demeaned)[which(apply(demeaned, 2, var) < 0.0001)] # check variance in demeaned variables
+
+demeaned = demeaned[,..vars_control]
+dfReg_demeaned[, (vars_control) := demeaned]
+
+
+dfReg_demeaned$stockReg <- fixest::demean(X = dfReg_demeaned$stockReg,
+                                          f = dfReg_demeaned[, c("companyCity", "month_sic")])
+for(v in vars_firm){
+  dfReg_demeaned[[paste0("postCovid_", v)]] <- dfReg_demeaned[["postCovid"]] * dfReg_demeaned[[v]] 
+  dfReg_demeaned[[paste0("postCovid_", v)]] <- fixest::demean(X = dfReg_demeaned[[paste0("postCovid_", v)]],
+                                                              f = dfReg_demeaned[, c("companyCity", "month_sic")])
+  dfReg_demeaned[[v]] <- NULL
+  
+}
+fwrite(dfReg_demeaned, file.path(data_by, "dat_demeaned_for_ml.csv.gz"))
+
+# form_1way <- vars
+# form_1_quadr <- paste0(vars, "^2") 
+# form_2way <- combn(vars,2)
+# form_2way <- paste0(form_2way[1,],":", form_2way[2,])
+# causal_predictors <- paste0("postCovid:", c(form_1way, form_1_quadr, form_2way), collapse = " + ")
+# predictors <- paste(causal_predictors, main_effects, sep = " + ")
+# 
+# 
+# ## install hdm from github as CRAN version is outdated
+# # mb just here for David to see, should be moved to the 00_prep later
+# 
+# # Sys.setenv(https_proxy = "browse.vip.dmz.bankofengland.co.uk:8080")
+# # Sys.setenv(http_proxy_user = ":")
+# # devtools::install_github("MartinSpindler/hdm")
+# # Sys.setenv(https_proxy = "")
+# # Sys.setenv(http_proxy_user = "")
+# library(hdm)
+# fmla <- as.formula(paste("stockReg~", predictors))
+# lasso_mod <- rlasso(fmla, data = data.frame(dfReg_demeaned), penalty = list(homoscedastic = FALSE, X.dependent.lambda = FALSE))
+# 
+# # stats_lasso_mod <- summary(lasso_mod) #  summary operation is very slow! Standard errors are not presented
+# coefs_nonzero <- names(lasso_mod$coefficients[lasso_mod$coefficients!= 0])
+# coefs_nonzero <- setdiff(coefs_nonzero, "(Intercept)")
+# # coefs_nonzero <- paste(coefs_nonzero, collapse = " + ")
+# # coefs_nonzero <- as.formula(paste("~", coefs_nonzero))
+# 
+# 
+# 
+# # see vignette page 29: slow
+# dd <- rlassoEffects(formula = as.formula(fmla), data = data.frame(dfReg_demeaned), I = as.formula(paste("~",causal_predictors)))
+# 
+# 
+# 
+# # lasso_effects <- rlassoEffects(formula = as.formula(fmla), data = data.frame(dfReg_demeaned), 
+# #                                method = "double selection",
+# #                                included = as.formula(~covid_deaths_log + covid_cases_log))
+# #                                I = coefs_nonzero, 
+# #                                # I = as.formula("~postCovid:assets_log:deposits_log + postCovid:assets_log:home"),
+# #   
+# 
+
+

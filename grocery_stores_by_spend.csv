@@ -1,0 +1,433 @@
+brands,raw_total_spend
+Walmart,748437160.06
+Costco,382307469.42
+Kroger,161166427.41
+Sam's Club,141481285.03
+Publix Super Markets,118854690.01
+Safeway,115212276.5
+Food Lion,77939594.86
+Meijer,74952508.9
+Trader Joe's,71880836.92
+Whole Foods Market,61836008.31
+Wegmans Food Markets,60397841.96
+Stop & Shop,54590684.15
+ALDI,52109016.65
+H-E-B,51855332.08
+ShopRite,45596267.65
+Dollar General,45241863.82
+BJ's Wholesale Club,43239783.93
+Harris Teeter,42745830.88
+Wawa,36639992.27
+Giant Eagle,34212531.1
+Albertsons,28741309.2
+Fred Meyer,28495317.25
+WinCo Foods,24268470.87
+Ralphs,21283223.15
+7-Eleven,20872655.13
+Vons,20764409.080000002
+Hannaford Supermarkets,20393032.19
+Giant Food,18292616.6
+Circle K,17791374.75
+Restaurant Depot,17613109.91
+Winn Dixie,17498281.26
+Weis Markets,16302358.52
+Fry's Food & Drug Stores,16086388.25
+Dollar Tree,15338222.27
+King Soopers,15029087.72
+Sprouts Farmers Market,13452710.09
+Big Lots Stores,13399340.5
+Smith's Food & Drug Stores,12972046.7
+Stater Bros. Markets,12544724.84
+Tops Friendly Markets,12378970.82
+Family Dollar Stores,12202243.05
+Jewel-Osco,12038598.37
+Ingles Markets,10532369.24
+Mariano's,9905148.01
+Key Food,9168553.63
+Price Chopper New England,8932056.81
+Royal Farms,8753198.06
+Big Y Foods,7976075.69
+The Fresh Market,7608718.61
+Smart & Final,7476954.29
+Lowes Foods,7304148.64
+Hy-Vee,6964854.12
+Casey's General Stores,6097480.93
+Market Basket,6023941.33
+Save-A-Lot,5782007.92
+GetGo,5770977.7
+Raley's,5586876.17
+Food 4 Less,5234806.18
+H Mart,5087445.33
+Shaw's,4451100.25
+Save Mart Supermarkets,4424105.26
+QFC (Quality Food Centers),4394472.39
+Turkey Hill,4076511.63
+Woodman's Market,3995332.9
+Schnucks,3943694.39
+Lidl,3910684.92
+Market District,3887680.4499999997
+Food City,3835532.97
+99 Ranch Market,3816006.54
+Gordon Food Service Store,3778311.62
+Piggly Wiggly,3632536.68
+Foodtown,3332135.39
+Dillons Supermarkets,3321748.16
+Ollie's Bargain Outlet,3275368.01
+99 Cents Only Stores,3241491.36
+Brookshire's Grocery Company,3143417.14
+Stewart's Shops,3072820.82
+SHOPPERS Food & Pharmacy,3058473.62
+Grocery Outlet,3024797.81
+BI-LO,3009092.6
+Pavilions,2968389.07
+Five Below,2858463.44
+Pick 'n Save,2806994.97
+Randall's Food Markets,2798509.86
+Redner's Markets,2785062.0
+Rouses Markets,2677104.64
+Fresh Thyme,2667929.63
+King Kullen Grocery Co.,2639632.69
+Market Street,2507203.61
+Kwik Trip,2479885.38
+Lucky Supermarkets,2364975.04
+Patel Brothers,2349275.42
+Mapco,2291010.33
+Natural Grocers,2284050.26
+FoodMaxx Supermarkets,2263167.6
+Gelson's Markets,2244781.33
+Stew Leonard's,2070873.23
+Belk,2056410.1400000001
+City Market,1918221.39
+Nob Hill Foods,1855960.3800000001
+Marc's,1780568.84
+Kings Food Markets,1711387.12
+Haggen,1695487.74
+C Town Supermarkets,1648211.36
+Acme Fresh Market,1640867.66
+Smart Foodservice,1602601.48
+Navy Exchange,1568445.77
+Cub Foods,1503048.32
+Jetro Cash & Carry,1478710.3900000001
+UDF (United Dairy Farmers),1459256.47
+Dierbergs Markets,1447959.3599999999
+Carrs,1424710.1
+Tuesday Morning,1393610.98
+Family Fare,1276103.23
+Bel-Air,1216831.26
+Central Market,1212562.48
+Ocean State Job Lot,1185571.28
+Food Bazaar Supermarket,1174858.79
+El Super,1156784.84
+Food Depot,1128990.57
+Gristedes,1109678.18
+Pay Less Super Markets,1065236.7
+Brookshire Brothers,1062375.51
+Mills Fleet Farm,1036981.89
+Sedano's Supermarkets,1002101.02
+North Shore Farms,992004.3099999999
+Food Universe Marketplace,982190.32
+Cardenas Markets,979326.83
+Stein Mart,936160.6
+Jay C,926917.07
+Uncle Giuseppe's,915102.82
+Vallarta Supermarkets,898242.41
+PriceRite,896893.62
+Bashas' Supermarkets,891334.76
+Allsup's,886929.0
+Tony's Finer Foods,877649.5199999999
+Baker's Supermarkets,875268.13
+Bristol Farms,868864.65
+Festival Foods Wisconsin,837107.15
+Christmas Tree Shops,830308.22
+Martin's Super Markets,793311.75
+Fresco y Más,745434.22
+Fareway Stores,712398.56
+Super King Markets,698002.1699999999
+Fiesta Mart,659660.64
+Metro Market,657155.21
+Kmart,642047.91
+SHOP 'n SAVE Supermarkets,637511.76
+Giunta's Meat Farms,624774.66
+Quik Stop,622381.83
+The Food Emporium,599363.78
+Crest Foods,596423.29
+IGA,574625.46
+Sunset Foods,567865.85
+New Seasons Market,564058.99
+Kwik Shop,560594.63
+Super 1 Foods & Discount Pharmacy,534502.04
+Market of Choice,533137.14
+Metropolitan Market,527430.18
+Greatwall Supermarket (GW),526555.74
+GoMart,519523.52999999997
+Flash Foods,506391.51
+Strack & Van Til,504734.03
+Foods Co.,481885.0
+Harps Food Store,468600.6
+Compare Foods Supermarkets,468023.76
+Harmons,454655.22
+Cash Wise,454220.62
+Western Beef,452896.11
+Lunds & Byerlys,446268.3
+Best Market,427015.96
+Von Maur,416728.88
+Dave's Markets,399925.6
+Needler's Fresh Market,394231.93
+County Market,385619.63
+Reasor's,378322.43
+Handy Mart,348692.41
+Homeland,347478.58
+Hucks,343804.09
+Cermak Fresh Market,339687.37
+Ruler Foods,334114.83999999997
+D&W Fresh Market,332976.96
+168 Market,326311.97
+Coborn's,324646.13
+Price Less Foods,317959.52999999997
+ABC Stores,311990.71
+Wild by Nature,297043.05
+Seafood City,294658.8
+Superior Grocers,278745.38
+Five Star Food Mart,270127.08
+Boyer's Food Markets,264195.31
+Super A Foods,246789.37
+Butera Market,244949.72
+Country Market,241781.66
+The Fresh Grocer,234236.91
+Dirt Cheap,232846.69
+On The Run Convenience,232742.0
+Gerrity's Supermarket,227852.55
+Shore Stop,223454.96
+Roses Express,222185.79
+Foodland,221538.58000000002
+Family Express,219868.74
+Food Fair,211955.38
+FYE,204538.49
+Associated Supermarkets,202249.83000000002
+Holiday Market,200913.04
+Sharp Shopper,194999.0
+Gerbes Super Markets,186881.45
+Brooklyn Fare,184203.74
+Pak N Save,169934.19
+Hen House,168807.93
+Garden Fresh Market,164370.30000000002
+El Rancho Supermercado,163243.27000000002
+Barons Market,162120.38
+DAISO,160464.85
+Broulim's,156714.02000000002
+Spring Market,150441.6
+Food Source,150343.19
+Food Giant,149992.91
+Dave's Marketplace,143744.26
+Mother's Market,139786.57
+Clark's Market,137175.53
+Arlan's Market,136470.0
+Stripes Convenience Stores,130537.83
+Price Cutter,130001.7
+Times Supermarkets,129357.22
+Super Supermarket,126139.96
+Fine Fare Supermarkets,124594.88
+Maplefields,120560.83
+Curacao,118211.64
+Harvest Supermarket,116742.4
+Cost Less Foods,107574.22
+Harvest Foods,106695.64
+Parker's,106450.25
+Festival Foods Minnesota,105989.89
+Numero Uno Markets,105517.18
+Lee's Marketplace,103952.51999999999
+D'Agostino,101209.14
+Met Foodmarkets,94751.87000000001
+Green's Natural Foods,94531.43
+India Bazaar,93469.29
+United Supermarkets,90890.48999999999
+Superfresh,88138.6
+Super Quik,87918.06999999999
+OnCue,83508.4
+Zupan's Markets,80403.08
+Jerry's Foods,78095.56
+Macey's,75034.97
+Fiesta Foods,73303.97
+La Bella Marketplace,71223.2
+Jensen's Foods,71216.73
+Uptown Grocery,70925.53
+Roth's Fresh Markets,70735.41
+10Box Cost-Plus,68148.28
+Erewhon Natural Foods,67419.91
+Ramey's Marketplace,61348.0
+Quality Dairy,60751.009999999995
+Fallas,55906.45
+Crosby's,55194.14
+Peck's Market,53775.01
+Maxway,52826.340000000004
+Nicholas Markets,51585.97
+Food Dynasty,51431.12
+Chavez Supermarket,50421.65
+Fast Stop,48610.119999999995
+Mini Mart,47463.0
+Community Markets,45783.35
+Swiss Farms,45610.64
+Trexcon,45605.62
+Redi Mart,44804.9
+Fairplay,44673.65
+Mac's Fresh Market,44530.13
+Fresh Foods,43274.06
+Rancho Markets,42277.18
+Buehler's Fresh Foods,40965.92
+Sellers Bros.,39725.1
+Dari Mart,39320.32
+Greer's,37938.61
+Hornbacher's,37292.549999999996
+Ream's,36769.96
+Foodarama,36422.62
+Top Star Express,34961.49
+Russ's Market,34952.03
+Astro,34378.54
+Family Fresh Market,34278.299999999996
+Lassens Natural Foods and Vitamins,34120.35
+Next Door Store,33755.05
+Caraluzzi's,33583.01
+CV's Family Foods,32932.18
+Remke Markets,31726.309999999998
+Superlo Foods,30172.7
+Corner Market,30040.11
+Earth Origins Market,30034.95
+Lucky's Market,29720.550000000003
+Amigos,29532.05
+Alta Convenience,28842.25
+Cliff's Local Market,28684.14
+Home of Economy,28034.3
+Inland Sun Stop,27287.190000000002
+Big Saver Foods,27067.43
+Joe's Kwik Mart,26727.100000000002
+Holiday Foods,26598.14
+Kangaroo Express,26228.58
+Alltown,26179.059999999998
+Dandy Mini Marts,26056.46
+Sun Fresh,26023.92
+Teal's Market,25997.07
+Park & Shop,25829.43
+Glory Supermarket,25469.29
+Snappy's,25419.93
+Sentry Foods,25313.37
+Berkot's Super Foods,23682.52
+Good Earth Natural Foods,23287.55
+Fairway Market,21439.39
+G&W Foods,19702.83
+Juniors Supermarket,19649.010000000002
+Friendly Express,19634.050000000003
+Food World,19356.53
+Double Quick,19295.98
+Jiffy Trip,19207.84
+Ayerco,19144.64
+Stop 'n Save,18655.43
+US Foods,17933.95
+Tamura's Market,17561.77
+PETE'S,17435.78
+Dash In,17293.89
+Meet Fresh,17119.0
+Duck Thru,16417.37
+Tropical Supermarket,16005.029999999999
+Beacon & Bridge,15662.19
+Angelo Caputo's Fresh Markets!,15192.66
+Williams Foods,13885.060000000001
+Hiep Thai Food Store,13308.04
+Brookstone,12964.48
+El Río Grande,12557.210000000001
+Savory Spice Shop,12167.59
+Real Deals,11727.07
+Quik Mart,11559.619999999999
+Brothers Market,11532.62
+Super C Mart,11152.539999999999
+Sabor Tropical,11102.43
+Cost-U-Less,10554.07
+Food Rite,10487.18
+Double Kwik,10276.279999999999
+Adam's Hometown Market,9605.17
+El Ahorro Supermarket,9269.18
+Rapid Roberts,9133.779999999999
+Arteagas Food Center,9092.81
+Super Dollar,8910.939999999999
+Quick Mart,8878.7
+Market Express,8781.380000000001
+Richard's Whole Foods,8499.89
+Prenger Foods,8281.79
+Handy Pantry,8114.17
+Zoomerz,7993.83
+Honey Farms,7959.33
+C and R Market,7921.96
+Exxpress Mart,7653.11
+Valley Dairy,7591.7
+The Spice & Tea Exchange,7555.11
+Terrible Herbst,6826.17
+Gene's Heartland Foods,6163.14
+Nutrition Smart,6153.4400000000005
+America's Food Basket,5775.07
+Buy For Less,5741.51
+Wild Fork,5674.0599999999995
+Golden Pantry,5657.38
+Dollar Castle,5403.83
+Miller's Fresh Foods,5381.1
+Roses,4930.88
+White Oak Station,4758.42
+Superpumper,4754.39
+Tom Thumb Food Stores,4480.38
+Bargain Town,4402.2
+Breadbox Food Store,4280.1
+Harveys Supermarket,4193.62
+Fresh Market,4067.45
+PCC Natural Markets,3934.7
+Buche Foods,3683.0699999999997
+Presidente Supermarkets,3526.88
+ampm,3388.01
+The Pie Hole,3302.96
+Tresierras Supermarkets,3277.25
+BellStores,3156.25
+Champlain Farms,3059.96
+Corner Pantry,2974.69
+Dan's Supermarket,2752.39
+Acorn Markets,2710.7799999999997
+Hays Store,2633.33
+Island Pacific Seafood Market,2582.38
+Stokes Market,2393.31
+Supermercado Mi Tierra,2393.05
+Little General Stores,2180.0
+Mickey Mart,2128.0
+Fresh and Natural Foods,2034.56
+Marketplace Foods,2019.76
+Bravo Supermarkets,1740.69
+Super Dollar Stores,1702.04
+Farm Stores,1684.68
+Warehouse Discount Groceries,1617.2000000000003
+United Grocery Outlet,1368.96
+Grocery Depot,1312.64
+Edwards Food Giant,1299.03
+4 Sons Food Stores,1295.8
+Chuckles,1149.83
+VG's Grocery,1091.86
+Porters Thriftway,1032.34
+King Cash Saver,1029.8
+Countryside Cooperative,972.65
+Earth Fare,852.53
+Terry's Supermarket,848.4399999999999
+Big 10 Mart,837.97
+AJ's Fine Foods,763.3
+Kwik Stop,761.6600000000001
+RoseMart,679.34
+La Michoacana Meat Market,646.4300000000001
+Star Market,638.22
+Lowe's Market,569.0799999999999
+Quick Shop,510.0
+Ray's Food Place,503.92999999999995
+Handy Food Stores,444.38
+L&L Food Stores,282.0
+New Leaf Community Markets,278.49
+Pride,225.17
+Sendik's Food Market,173.76
+Bill's Dollar Store,155.3
+Jiffi Stop,154.0
+Pour Boy Oil,97.6
+fred's,67.64
+Miniso,57.6
+Porters,44.92
+Eagle Stop,13.0

@@ -1,0 +1,472 @@
+#**************************************************************
+#### Analysis Functions #### 
+#**************************************************************
+
+getCIs <- function(mdl) { 
+
+  coeffs <- mdl$coefficients
+  ses <- mdl$se
+  min <- coeffs - 1.96*ses
+  max <- coeffs + 1.96*ses
+  
+  dt_out <- data.table(coeff_names = names(coeffs), coeffs, ses, min, max)
+  
+  return(dt_out)
+  
+}
+
+
+
+
+plotRobust <- function(fe, fileName = "controlRobust_") {
+  
+  # estimate baseline effects
+  fmla <- as.formula(paste0("num_devices_diff_log_1m ~ trump_share_votes + trump_island + trump_share_votes:trump_island + 
+                     distTo_ProudBoys_ln + parler_count_ln + median_hh_inc_ln + male + race_w + race_b + race_h + 
+                     edu_highschool + publicAssistance + unemployed", fe))
+  fe <- gsub("\\| ", "", fe)
+  
+  mdl <- fixest::feols(fmla, cross, notes = FALSE)
+  mdl <- summary(mdl, se = "cluster", cluster = "origin_county")
+  
+  coeffs_base <- mdl$coefficients
+  ts_base <- coeffs_base / mdl$se
+  
+  
+  # load all combinations 
+  load(file.path(dataOut, paste0(fileName, fe, "_hash.Rdata"))) # load environment "h"
+  
+  quiche <- keys(h)
+  quiche <- quiche[!grepl(".se", quiche)] # loop only over coeff names, not se names
+  
+  for (q in quiche) {
+    
+    coeff_base <- coeffs_base[q]
+    t_base <- ts_base[q]
+    
+    coeffs <- h[[q]]
+    ses <- h[[paste0(q, ".se")]]
+    ts <- coeffs / ses
+    
+    plot <- data.table(coeffs, ts)
+    
+    sign <- mean(plot$coeffs) / abs(mean(plot$coeffs)) # to have tstat on right side
+    
+    
+    p <- ggplot(plot, aes(x = ts, y = coeffs)) + 
+      geom_point(color = "black", size = 0.2) + expand_limits(x = 0, y = 0) + 
+      geom_vline(xintercept = t_base, size = 2, alpha = 0.35, color = "grey70") +
+      geom_hline(yintercept = coeff_base, size = 2, alpha = 0.35, color = "grey70") +
+      xlab("T-Stat") + ylab("Coeff.") + 
+      geom_vline(xintercept = 2*sign, linetype = "dashed", color = "red", alpha = 0.5, size = 1.5) +
+      theme(axis.title = element_text(size = 24), 
+            axis.text = element_text(size = 24))
+    
+    ggsave(file.path(figs, 'controlRobust', paste0(fileName, fe, "_", q, '.pdf')), width = 4, height = 3)
+    
+  }
+}
+
+
+
+
+controlRobust <- function(coeffs =  c("distTo_ProudBoys_ln",  "parler_count_ln", "median_hh_inc_ln", "male", "race_w", 
+                                      "race_b", "race_h", "edu_highschool", "publicAssistance", "unemployed"), 
+                          fixed = c("trump_share_votes", "trump_island"), 
+                          fixed_inter = "trump_island:trump_share_votes",
+                          outName = "controlRobust_") { 
+  
+  # get all possible combinations, always including trump vote share and island interactions
+  combos <- paste(c(fixed,  fixed_inter), collapse = "+")
+  for (i in 1:length(coeffs)) {
+    ncr <- combn(coeffs, i)
+    for (j in 1:dim(ncr)[2]) { 
+      combos <- c(combos, paste(c(ncr[,j], fixed, fixed_inter), collapse = "+"))
+    }
+  }
+  
+  
+  for (fe in c("", "| origin_state", "| origin_county")) { # c("", "| origin_state", "| origin_county"))  { 
+    
+    # create empty dictionary for results
+    I <- length(combos)
+    pb <- txtProgressBar(min = 0, max = I, style = 3)
+    h <- hash::hash()
+    
+    for (i in 1:I) {
+      comboString <- combos[i]
+      
+      fmla <- as.formula(paste0("num_devices_diff_log_1m ~", comboString,  fe))
+      
+      mdl <- fixest::feols(fmla, cross, notes = FALSE)
+      mdl <- summary(mdl, se = "cluster", cluster = "origin_county")
+      
+      coeffs <- mdl$coefficients
+      ses <- mdl$se
+      for (j in 1:length(coeffs)) { # put into dict
+        coeff <- coeffs[j]
+        se <- ses[j]
+        nam <- names(coeff)
+        h[[nam]] <- c(h[[nam]], as.vector(coeff))
+        h[[paste0(nam, ".se")]] <- c(h[[paste0(nam, ".se")]], se)
+      }
+      
+      setTxtProgressBar(pb, i)
+    }
+    close(pb)
+    
+    save(h, file = file.path(dataOut, paste0(outName, gsub("\\| ", "", fe), "_hash.Rdata")))
+  }
+}
+
+
+
+trumpIsland <- function(fileName = file.path(dataIn, "votes2016_byCbg.csv.gz"), trumpName = "g16prertru", clintonName = "g16predcli", 
+                        totalName = "total", cbgName = "poi_cbg") {
+  #'''' gets neighbor CBG's votes based on CBG-level election data and CBG adjacency matrix '''' 
+  # ARGUMENTS
+  # fileName : name of cbg-level election data
+  # trumpName : name of trump votes column in fileName
+  # clintonName : name of clinton votes column in fileName
+  # totalName : name of total votes column in fileName
+  # cbgName : name of cbg column in fileName
+  #
+  # OUTPUT
+  # writes [fileName]_neighbors.csv.gz to disk
+  
+  # read cbg shapefile as sp object
+  cbg_stacked <- read_sf(file.path(dataIn, 'census_bg_shapefiles', 'census_bg_merged.shp')) %>% 
+    st_transform(2163) %>% # transform coordinate system
+    set_names(colnames(.) %>% str_to_lower()) # set column names to lower caps
+  
+  # get cbg-level votes
+  votes_cbg <- fread(fileName)
+  setnames(votes_cbg, cbgName, "origin_cbg")
+  votes_cbg[, origin_cbg := padCbg(origin_cbg)] 
+  setnames(votes_cbg, totalName, "totalvotes_cbg")
+  
+  
+  # create missing cbgs
+  cbg_miss <- setdiff(cbg_stacked$geoid, votes_cbg$origin_cbg)
+  cbg_miss <- data.table(origin_cbg = cbg_miss)
+  votes_cbg <- rbind.fill(votes_cbg, cbg_miss) %>% as.data.table()
+  
+  # calculate vote share
+  votes_cbg$trump_share <- votes_cbg[[trumpName]] / votes_cbg$totalvotes_cbg
+  votes_cbg$clinton_share <- votes_cbg[[clintonName]] / votes_cbg$totalvotes_cbg
+  
+  
+  
+  # get cbg neighbors list saved above (loads an object 'listw')
+  load(file = file.path(dataBy, 'adjbn.listw.Rdata'))
+  
+  # get list of cbg ids
+  cbg_list <- cbg_stacked$geoid
+  
+  # pre-assign empty columns
+  votes_cbg[, (c("trump_neighbor_avg", "clinton_neighbor_avg", "trump_neighbor", "clinton_neighbor"))  := numeric()]
+  
+  # prepare for looping
+  I <- length(listw$neighbours)
+  pb <- txtProgressBar(min = 0, max = I, style = 3)
+  
+  for (i in 1:I) {
+    # get origin cbg
+    cbg_select <- cbg_list[i]
+    
+    # get neighboring cbgs
+    cbg_neighbors <- cbg_list[listw$neighbours[[i]]]
+    
+    # get cbg-level votes in neighboring cbgs
+    subset <- votes_cbg[origin_cbg %in% cbg_neighbors]
+    
+    # calculate votes in those cbgs
+    trumpvotes <- sum(subset[[trumpName]], na.rm = TRUE) 
+    clintonvotes <- sum(subset[[clintonName]], na.rm = TRUE)
+    totalvotes <- sum(subset$totalvotes_cbg, na.rm = TRUE) 
+    
+    trumpshare <- mean(subset$trump_share, na.rm = TRUE)
+    clintonshare <-  mean(subset$clinton_share, na.rm = TRUE)
+    
+    # assign to rows corresponding to origin_cbg in data table
+    votes_cbg[origin_cbg == cbg_select, trump_neighbor := trumpvotes / totalvotes]
+    votes_cbg[origin_cbg == cbg_select, clinton_neighbor := clintonvotes / totalvotes]
+    votes_cbg[origin_cbg == cbg_select, trump_neighbor_avg := trumpshare]
+    votes_cbg[origin_cbg == cbg_select, clinton_neighbor_avg := clintonshare]
+    
+    setTxtProgressBar(pb, i) # update progress bar
+  }
+  
+
+  # write to file
+  fn <-  sub(".*/", "", fileName) # get only filename (not path)
+  fn <- file.path(dataBy, paste0(gsub(".csv.gz", "", fn), '_neighbors.csv.gz'))
+  fwrite(votes_cbg, fn)
+  
+  
+}
+
+
+
+
+intersectParler <- function(cbg_stacked, parler, split = 100, id = "geoid") { 
+  # """ Intersect lat-long data frame with shapefile
+  # ARGUMENTS
+  # cbg_stacked : shapefile with 2163 crs
+  # parler : data frame with lat long coordinates
+  # split : number of parts to split data frame in to keep RAM from crashing
+  # id : name of area id in shapefile we're matching to
+  
+  # long = x, lat = y
+  split <- split
+  pnts_full <- parler[,c("Longitude", "Latitude")]
+  pnts_full <- split(pnts_full, rep(1:split, each = dim(pnts_full)[1]/split )) # split into several data tables because intersecting it all at once crashes RAM
+  
+  
+  pnts_out <- data.table(Longitude = numeric(), Latitude = numeric(), id = character())
+  
+  for (i in 1:split) { # loop over several sub-data tables and intersect parler videos long-lat with cbg shapefile
+    
+    pnts <- pnts_full[[i]]
+    pnts_sf <- do.call("st_sfc",c(lapply(1:nrow(pnts),
+                                         function(i) {st_point(as.numeric(pnts[i, ]))}), list("crs" = 4326)))
+    pnts_trans <- st_transform(pnts_sf, 2163) # number specifies the coordinate system
+    
+    intersected <- apply(st_intersects(cbg_stacked, pnts_trans, sparse = FALSE), 2, # get intersected cbg for each parler video
+                         function(col) {
+                           cbg_stacked[which(col), ][[id]]
+                         })
+    pnts$id <- unlist(lapply(intersected, # assign cbg ids to each parler video (order is preserved)
+                             function(x) if(identical(x,character(0))) NA else x))
+    if (length(intersected) == 0)
+      pnts$id <- NA # if no intersection, assign NA to parler video cbg (possible if video recorded outside of US)
+    pnts_out <- rbind(pnts_out, pnts)
+    
+  }
+  return(pnts_out)
+}
+
+
+
+#**************************************************************
+#### Helper Functions #### 
+#**************************************************************
+
+
+padCbg <- function(x) {
+  # pad census block group id
+  str_pad(x, 12, 'left', '0')
+}
+
+fastDate <- function(x, format = "%Y-%m-%d")
+  ## faster version of as.Date
+  as.Date(lubridate::fast_strptime(as.character(x), format = format))
+
+setroworder <- function(x, neworder) {
+  ## order data table by rows
+  .Call(data.table:::Creorder, x, as.integer(neworder), PACKAGE = "data.table")
+  invisible(x)
+}
+
+## to assign multiple variables at once
+# Generic form
+'%=%' = function(l, r, ...) UseMethod('%=%')
+
+# Binary Operator
+'%=%.lbunch' = function(l, r, ...) {
+  Envir = as.environment(-1)
+  
+  if (length(r) > length(l))
+    warning("RHS has more args than LHS. Only first", length(l), "used.")
+  
+  if (length(l) > length(r))  {
+    warning("LHS has more args than RHS. RHS will be repeated.")
+    r <- extendToMatch(r, l)
+  }
+  
+  for (II in 1:length(l)) {
+    do.call('<-', list(l[[II]], r[[II]]), envir=Envir)
+  }
+}
+
+# Used if LHS is larger than RHS
+extendToMatch <- function(source, destin) {
+  s <- length(source)
+  d <- length(destin)
+  
+  # Assume that destin is a length when it is a single number and source is not
+  if(d==1 && s>1 && !is.null(as.numeric(destin)))
+    d <- destin
+  
+  dif <- d - s
+  if (dif > 0) {
+    source <- rep(source, ceiling(d/s))[1:d]
+  }
+  return (source)
+}
+
+
+# Grouping the left hand side
+g = function(...) {
+  List = as.list(substitute(list(...)))[-1L]
+  class(List) = 'lbunch'
+  return(List)
+}
+
+
+
+
+## Transparent colors
+## Mark Gardener 2015
+## www.dataanalytics.org.uk
+
+t_col <- function(color, percent = 50, name = NULL) {
+  #      color = color name
+  #    percent = % transparency
+  #       name = an optional name for the color
+  
+  ## Get RGB values for named color
+  rgb.val <- col2rgb(color)
+  
+  ## Make new color using input color as base and alpha set by transparency
+  t.col <- rgb(rgb.val[1], rgb.val[2], rgb.val[3],
+               max = 255,
+               alpha = (100 - percent) * 255 / 100,
+               names = name)
+  
+  ## Save the color
+  invisible(t.col)
+}
+## END
+
+
+
+
+
+
+# get old png paths
+getPngPaths <- function() {
+  plots.dir.path <- list.files(tempdir(), pattern="rs-graphics", full.names = TRUE); 
+  plots.png.paths <- list.files(plots.dir.path, pattern=".png", full.names = TRUE)
+  return(plots.png.paths)
+}
+
+roundS <- function(x, digits) {
+  format(round(x,digits), scientific = FALSE, nsmall = digits)
+}
+
+# pval to stars
+pval_stars <- function(pval) { 
+  if (pval < 0.01) {
+    stars <- "***"
+  } else if (pval < 0.05) {
+    stars <- "**"
+  } else if (pval < 0.1) {
+    stars <- "*"
+  } else{
+    stars <- ""
+  }
+  return(stars)
+}
+
+
+rddplot <- function(df, x_var = "biden_share_votes_state_2020", y_var = "particip_prob", conditional = FALSE, xlim = NULL, ylim = NULL, 
+                    jwidth = 0.0005, poly = 1, xlab = "Biden State Vote Share (2020)", ylab = NULL, size = 1.5, cutoff = 0.5, alpha = 1) {
+  if (conditional) {
+    df <- df[num_devices > 0]
+  }
+  p <- ggplot(df[df[[x_var]] < cutoff], aes_string(x = x_var, y = y_var)) + 
+    ggrastr::geom_jitter_rast(size = size, color = "red", width = jwidth, height = 0, alpha = alpha) + 
+    geom_smooth(method='lm', formula=y ~ poly(x, poly, raw=TRUE), color = "black") +
+    ggrastr::geom_jitter_rast(data = df[df[[x_var]] > cutoff], 
+               mapping= aes_string(x = x_var, y = y_var), size = size, color = "blue", width = jwidth, height = 0, 
+               alpha = alpha) + 
+    geom_smooth(data = df[df[[x_var]] > cutoff], 
+                method='lm', formula=y ~ poly(x, poly, raw=TRUE), color = "black") +
+    geom_vline(xintercept = cutoff)   + # + ylim(ylim) 
+    theme_classic() +
+    theme(text=element_text(family="LM Roman 10", size=16))   
+  
+  if (!is.null(ylim)) p <- p + coord_cartesian(ylim = ylim)
+  if (!is.null(xlim)) p <- p + xlim(xlim)
+  if (!is.null(xlab)) p <- p + xlab(xlab)
+  if (!is.null(ylab)) p <- p + ylab(ylab)
+  return(p)
+}
+
+
+
+
+savepdf <- function(fname, width=16, height=10)
+  # """" for reducing whitespace """ 
+{
+  pdf(fname, width=width/2.54, height=height/2.54,
+      pointsize=10)
+  par(mgp=c(2.2,0.45,0), tcl=-0.4, mar=c(3.3,3.6,1.1,1.1))
+}
+
+
+
+#' Set Stata binary path (adapted so it always chooses Stata SE in Linux)
+#'
+#' Set Stata binary (among found alternatives) path. These settings are
+#' lost when R is closed, therefore you should consider adding a
+#' \code{options("RStata.StataPath")} line in your \code{.Rprofile}.
+#' 
+#' @export
+chooseStataBin2 <- function()
+{
+  OS <- Sys.info()["sysname"]
+  OS.type <- .Platform$OS.type
+  
+  ## ------------------------------
+  if (OS %in% c("Linux", "Darwin")) {
+    m <- c(`Stata MP` = "stata-mp",
+           `Stata SE` = "stata-se",
+           `Stata IC` = "stata",
+           `Small Stata` = "stata-sm" )
+    
+    bin <- Sys.which(m)
+    names(bin) <- names(m)
+    nApps <- length(availProg <- bin[ "" != bin])
+    
+    if (0 == nApps) {
+      stop("No application (detected) availables.\n",
+           "Set options('RStata.StataPath'), instead." )
+      
+    }  else if (nApps >= 1) {
+      
+      unnprog <- unname(availProg['Stata SE'])
+      options(RStata.StataPath = unnprog)
+      return(unnprog)
+    } else {
+      stop("Unexpected error")
+    }
+    ## ------------------------------
+  } else if (OS %in% "Windows"){
+    prog <- file.choose()
+    prog <- shQuote(tools::file_path_sans_ext(prog))
+    options(RStata.StataPath = prog)
+    return(prog)
+  } else {
+    ""
+  }
+  
+}
+
+compoundList <- function(x) {
+sapply(unique(names(x)), function(y) 
+  sum(unlist(x[names(x) == y])))
+}
+
+
+# prepare text to analyze by stripping leading and trailing punctuation
+# preserves contractions and all emoticons found in vader dictionary
+
+wordsPlusEmo <- function(text) {
+  #splits text into vector of words
+  wpe <- unlist(strsplit(text, "\\s+"))
+  #strips words of punctuation (unless the word is an emoticon)
+  stripped <- vader:::strip_punc(wpe)
+  return(stripped)
+}

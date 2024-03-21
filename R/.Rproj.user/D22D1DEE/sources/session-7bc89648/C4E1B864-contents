@@ -1,0 +1,764 @@
+#****************************************************************************************************************************************************
+
+# EAT OUT TO HELP OUT ANALYSIS: postcode / trading address level
+
+#****************************************************************************************************************************************************
+
+
+rm(list = setdiff(ls(), "cutoff"))
+source('000_master.R')
+
+#### construct vacancy stocks panel #### 
+
+stock <- fread(file.path(data_by, 'stock_bvd_firm_week.csv.gz'))
+#stock[, date := as.Date(date)]
+stock <- stock[week_start %between% as.Date(c("2020-03-01", "2020-09-03"))] # start at week 24 to mimic Fetzer's paper
+
+## get firm info
+vars <- c("company_name_bvd", "Number of trading addresses",
+          "Trading address(es) Full Postcode", constVars_nopanel, "Status date", "Company status", "Cons./Uncons. 2019")
+bvd <- fread(file.path(data_by, 'bvd_matched_indeed.csv.gz'), select = vars)
+bvd <- bvd[!duplicated(company_name_bvd)]
+
+stock <- bvd[stock, on = "company_name_bvd"]
+stock <- stock[!(`Company status` %in% c("Dissolved", "In liquidation") & `Status date` %between% as.Date(c("2020-03-01", "2020-09-01")))]
+stock [, c("Company status", "Status date") := NULL]
+
+
+
+
+### restart from here
+
+
+
+for (restos in c(TRUE, FALSE)) {
+  
+  trading <- stock[`Number of trading addresses` == 1]
+  
+  # # write combined postcodes to file
+  # postcodes <- unique(c(trading$`Trading address(es) Full Postcode`))
+  # fwrite(data.table(postcodes), file.path(data_by, 'postcodes_eoho.csv'))
+  
+  
+  setnames(trading, "Trading address(es) Full Postcode", "Postcode")
+  
+  
+  ## get geocoded postcodes (geocoding was done using PostcodesioR package on researcher laptop: see 02_2_getPostcodes.R script)
+  reread_postcodes <- 1
+  if (reread_postcodes) { 
+    postcodes <- fread(file.path(data_by, 'postcodes_eoho_geocoded.csv'), select = c("query", "codes.msoa", "codes.nuts", "outcode"))
+    setnames(postcodes, "query", "Postcode")
+  }
+  
+  trading <- postcodes[trading, on = "Postcode"]
+  
+  setnames(trading, "codes.msoa", "msoa11cd")
+  
+  
+  
+  # exclude industries with non-standard balance sheets, as in Andi's paper https://www.bankofengland.co.uk/working-paper/2019/all-you-need-is-cash
+  sicNams <- fread(file.path(data_in, "industry", 'uk-sic-2007-condensed_csv.txt'))
+  sicNams <- sicNams[!section %in% c("Q", # human health and social work
+                                     "K", # financial and insurance activities
+                                     "O", # public administration, defence, social security
+                                     "T", # activities of households
+                                     "U" # activities of extraterritorial organisations
+                                     #"I" # Accommodation and food service activities
+  )]
+  # pad sic codes
+  max_nchar <- max(nchar(sicNams$sic_code), na.rm = T)
+  sicNams[,sic:= lapply(.SD, function(x) str_pad(x, max_nchar, 'left', '0')), .SDcols = "sic_code"]
+  trading[,sic1 := lapply(.SD, function(x) str_pad(x, max_nchar, 'left', '0')), .SDcols = "sic1"]
+  trading <- trading[sic1 %in% unique(sicNams$sic)]
+  
+  setnames(trading, c("Bank & Deposits th GBP 2019", "Current Liabilities th GBP 2019", "Total Assets th GBP 2019", "Credit score"), 
+           c("cash", "leverage", "assets", "creditscore"), skip_absent = TRUE)
+
+  
+  if (restos) { trading <- trading[sic1 %in% sicNams[section != "I"]$sic] } # drop food and accommodation service activities for robustness
+
+  #### aggregate to msoa #### 
+  
+  local_var <- "msoa11cd"
+  
+  temp <- data.table::copy(trading)
+  
+  
+  # express firm variables relative to assets
+  vars_asset <- c("leverage", "cash")
+  temp[, (vars_asset) := lapply(.SD, function(x) x / assets), .SDcols = vars_asset]
+  
+  
+  temp[, stock := sum(stock), by = c(local_var, "week_start")]
+  temp[, c("codes.nuts",  "Postcode", "company_name_bvd", "sic1", "outcode") := NULL] # drop character vars for aggregation
+  vars_key <- c("week_start", "msoa11cd")
+  temp <- temp[`Cons./Uncons. 2019` != "Consolidated"]
+  temp <- temp[, `Cons./Uncons. 2019` := NULL]
+  temp <- temp[, lapply(.SD, mean, na.rm = TRUE), by = vars_key, .SDcols = colnames(temp)[!colnames(temp) %in% c(vars_key)]]
+  
+  
+  
+  #### get fetzer's data #### 
+  
+  reread_fetzer <- 0
+  if (reread_fetzer) {
+    fetzer <- foreign::read.dta(file.path(data_in, 'government_policies', 'eoho_fetzer.dta')) %>% setDT()
+    fwrite(fetzer, file.path(data_by, 'fetzer.csv.gz'))
+  } else {
+    fetzer <- fread(file.path(data_by, 'fetzer.csv.gz'))
+  }
+  vars_select <-  c("msoa11cd", "week", "year", "month", "covidcases",
+                    "nuts206cd", "nuts306cd", "lad19cd", "meals", "totaldiscountclaimed",
+                    "averagediscount", "restaurants_msoa", "imp_meals", 
+                    "population", "area_msoa", "sdlsoapopdensity", "popdensity",
+                    "all_commuters", "out_commuters", "in_commuters", "coviddeathsMarJul",
+                    "otherdeathsMarJul", "Owned", "Socialrented", "Privaterented",
+                    "FulltimestudentsInemployment", "FulltimestudentsUnemployed",
+                    "FulltimestudentsEconomicallyin", "eohorain",
+                    "sigeohorain","noneohorain", "signoneohorain",
+                    "noncoreheohorain", "noncorehnoneohorain",
+                    "signoncoreheohorain", "QualificationLevel3qualificati", "QualificationLevel4qualificati") # for variables descriptions, see /data/docs/fetzer_variables.csv
+  fetzer <- fetzer[,..vars_select]
+  fetzer[, week_start := as.Date(paste(year,week-1,1, sep = "-"), format = "%Y-%U-%u") - 1]
+  
+  # merge with stock data
+  trading <- temp[fetzer, on = c("msoa11cd", "week_start")] # almost no missings in Fetzer's data here, so missings created below are due to panel structure
+  
+  trading[, leverage := - leverage]
+  
+  # extend balance sheet variables across all dates (will be missing for dates firm posted no stock due to way I joined fetzer and stock data)
+  vars_bsheet <- c("cash", "leverage", "assets", "creditscore")
+  trading[, totalAssets := sum(assets, na.rm = TRUE), by = "msoa11cd"]
+  trading[, (paste0(vars_bsheet, "_assets")) := lapply(.SD, function(x) sum(x * assets / totalAssets, na.rm = TRUE)), by = "msoa11cd", .SDcols = vars_bsheet]
+  trading[, totalEmp := sum(`Number of employees 2019` , na.rm = TRUE), by = "msoa11cd"]
+  trading[, (paste0(vars_bsheet, "_emp")) := lapply(.SD, function(x) sum(x * `Number of employees 2019` / totalEmp, na.rm = TRUE)), by = "msoa11cd", .SDcols = vars_bsheet]
+  trading[leverage_assets == Inf, leverage_assets := NA] # so standardization below doesnt go awry
+  
+  trading[, (vars_bsheet) := lapply(.SD, mean, na.rm = TRUE), by = "msoa11cd", .SDcols = vars_bsheet]
+  
+  # set missing stocks to NA (again NA due to way I joined)
+  trading[is.na(stock), stock := 0]
+  
+  # adjust dates
+  trading <- trading[week %between% c(24,36)] # note: eohorain not missing for these weeks
+  
+  
+  # check if balanced
+  check <- table(trading$msoa11cd)
+  stopifnot(check == max(check))
+  
+  
+  
+  # keep only english msoas, as Fetzer focuses on those
+  trading <- trading[!is.na(nuts206cd)]
+  
+  
+  ## edit some variables for regression
+  trading[, stock_log := log(1+stock)]
+  
+  vars_factor <- c("week_start", "nuts206cd", "lad19cd") # unit-time
+  trading[, (vars_factor) := lapply(.SD, factor), .SDcols = vars_factor]
+  setnames(trading, c("week_start"), c("Week"))
+  
+  trading[, post := week >= 32] # post policy dummy
+  
+  # merge in time-varying restaurant list
+  eoho <- fread(file.path(data_by, 'eoho_panel.csv.gz'))
+  eoho <- postcodes[eoho, on = "Postcode"]
+  eoho[, weekday := lubridate::wday(date)]
+  eoho[, monwed := weekday %between% c(2,4)]
+  eoho <- eoho[monwed == TRUE]
+  eoho[, week_start := factor(lubridate::floor_date(date, unit = "week"))]
+  eoho <- eoho[, .(restaurants_msoa_timevar = .N), by = c("codes.msoa", "week_start")]
+  setnames(eoho, c("codes.msoa", "week_start"), c("msoa11cd", "Week"), skip_absent = TRUE)
+  
+  trading <- eoho[trading, on = c("Week", "msoa11cd")]
+  trading[is.na(restaurants_msoa_timevar), restaurants_msoa_timevar := 0]
+  
+  
+  
+  
+  # express eoho variables relative to population
+  vars_pop <- c("restaurants_msoa_timevar", "restaurants_msoa", "totaldiscountclaimed", "imp_meals")
+  trading[, (paste0(vars_pop, "_pc")) := lapply(.SD, function(x)  1000 * x / population), .SDcols = vars_pop]
+  
+  
+  setcolorder(trading, c("msoa11cd", "Week"))
+  
+
+  
+  
+  
+  #****************************************************************************************************************************************************
+  #### EAT OUT TO HELP OUT ANALYSIS: simple dd regressions ####
+  #****************************************************************************************************************************************************
+  
+  #temp <- trading[!is.na(cash) & !is.na(leverage) & !is.na(assets)]
+  #temp <- data.table::copy(trading[assets <= 25000]) # sme firms
+  
+  
+  #### prepare #### 
+  
+  test <- data.table::copy(trading)
+  
+  
+  vars_log <- c("imp_meals", "imp_meals_pc", "restaurants_msoa", "restaurants_msoa_pc", "assets")
+  test[, (paste0(vars_log, "_log")) := lapply(.SD, function(x) log(1+x)), .SDcols = vars_log]
+  
+  
+  vars_dummy <- c("cash_emp", "leverage_emp", "assets", "assets_log", "leverage_assets", "cash_assets", "leverage", "cash", "creditscore")
+  test[, (paste0(vars_dummy, "_dummy")) := lapply(.SD, function(x) as.numeric(x >= median(x, na.rm = TRUE))), .SDcols = vars_dummy]
+  
+  vars_factor <- (paste0(vars_dummy, "_dummy"))
+  test[, (vars_factor) := lapply(.SD, factor), .SDcols = vars_factor]
+  test[, post := as.numeric(post)]
+  #test[post == 0, c("eohorain", "sigeohorain") := 0]
+  
+  
+  
+  test[, treat := restaurants_msoa > 0]
+  #test[, planforjobs := as.Date(Week) >= lubridate::floor_date(as.Date("2020-07-08"), unit = "week")]
+  test[, stock_lead := shift(stock, type = "lead", n = 1), by = c("msoa11cd")]
+  test[, stock_lag := shift(stock, type = "lag", n = 1), by = c("msoa11cd")]
+  
+  vars_post <- c("imp_meals", "totaldiscountclaimed", "restaurants_msoa", "eohorain", "sigeohorain")
+  test[, (paste0(vars_post, "_post")) := lapply(.SD, function(x) x * post), .SDcols = vars_post]
+  
+  vars_mean <- c("sigeohorain_post", "eohorain_post")
+  test[, (vars_mean) := lapply(.SD, mean), by = c("msoa11cd", "post"), .SDcols = vars_mean]
+  
+  test[, treat_post := treat * post]
+  
+  test[, stock_diff := stock_lead - stock]
+  
+  test[, sigeohorain_treat := treat*sigeohorain]
+  
+  
+  test[is.infinite(leverage_emp), leverage_emp := NA]
+  
+  vars_standardize <- c(vars_log, paste0(vars_log, "_log"),  "leverage_assets", "cash_assets", "creditscore")
+  test[, (vars_standardize) := lapply(.SD, function(x) x / sd(x, na.rm = TRUE)), .SDcols = vars_standardize]
+  
+  setnames(test, "post", "Post", skip_absent = TRUE)
+  
+  
+  
+  
+  #****************************************************************************************************************************************************
+  #### baseline + region fes (table 1 in Fetzer) #### 
+  
+  
+  ## estimate models 
+  
+  fes <- c("+ nuts206cd^Week", "+ nuts306cd^Week", "+ lad19cd^Week")
+  depvars <- c("imp_meals_pc_log", "restaurants_msoa_pc_log", "imp_meals_log", "restaurants_msoa_log", "imp_meals", "restaurants_msoa")
+  
+
+  for (j in 1:length(depvars)) {
+    depvar <- depvars[j]
+    for (i in 1:length(fes)) {
+      fe <- fes[i]
+      fmla <- as.formula(paste0("log(1+stock) ~ Post*", depvar, "  |
+                       factor(msoa11cd) + factor(Week)", fe))
+      m <- fixest::feols(fmla, data = test, cluster = "lad19cd")
+      m$fixef_vars <- NULL
+      assign(paste0("m", i+(j-1)*length(fes)), m)
+    }
+  }
+  
+  
+  ## create custom statistics
+  # mean DV
+  my_fun = function(x) mean(exp(model.matrix(x, type = "lhs")) - 1)
+  fitstat_register("meany", my_fun, "Mean(exp(DV)-1)")
+  
+  # number of controls (besides baseline fes)
+  my_fun = function(x)  x$nparams - sum(x$fixef_sizes[names(x$fixef_sizes) %in% c("factor(msoa11cd)", "factor(Week)")]) - 1
+  fitstat_register("ctrls", my_fun, "Additional controls")
+  
+  # number of msoas
+  my_fun = function(x)  x$fixef_sizes[names(x$fixef_sizes) %in% c("factor(msoa11cd)")] 
+  fitstat_register("msoa", my_fun, "MSOA")
+  
+  # number of clusters
+  my_fun = function(x)  attr(x$cov.scaled, "G")
+  fitstat_register("clstrs", my_fun, "Clusters")
+  
+  # set variable names
+  dict <- c("imp_meals_pc_log"="Log(1+EOHO covered meals per capita)", 
+            "restaurants_msoa_pc_log"="Log(1+EOHO restaurants per capita)",
+            "imp_meals_log"="Log(1+EOHO covered meals)", 
+            "restaurants_msoa_log"="Log(1+EOHO restaurants)",
+            "imp_meals"="EOHO covered meals", 
+            "restaurants_msoa"="EOHO restaurants", 
+            "lad19cd" = "LAD")
+  fixest::setFixest_dict(dict)
+  
+  
+  #### To LaTeX and beyond! 
+  
+  # create latex table: part a
+  a <- etable(mget(paste0("m", seq(1,6))), fitstat = ~ meany + n + msoa + ctrls + clstrs, depvar = FALSE, 
+         tex = TRUE)
+  a <- a[1:which(grepl("Clusters",a))]
+  a <- gsub("Model", "DV: Log(1+Vacancy Stock)", a)
+  a[which(grepl("Variables",a))] <- "\\midrule \\multicolumn{7}{l}{\\textbf{Panel A}: EOHO exposure per capita in log}\\\\"
+  a[which(grepl("Fit statistics",a))] <- "" # remove unnecessary line
+  
+  
+  # create latex table: part b
+  b <- etable(mget(paste0("m", seq(7,12))), fitstat = ~   meany + n + msoa + ctrls + clstrs, depvar = FALSE, 
+              tex = TRUE)
+  b <- b[which(grepl("Variables",b)):which(grepl("Clusters",b))]
+  b[which(grepl("Variables",b))] <- "\\midrule \\multicolumn{7}{l}{\\textbf{Panel B}: EOHO exposure in log}\\\\"
+  b[which(grepl("Fit statistics",b))] <- "" # remove unnecessary line
+  
+  if (restos) { 
+  note <- "Table presents difference-in-difference regression estimates studying the impact of the EOHO scheme on the 
+              MSOA-level online vacancy stocks of local firms with one single trading address on Indeed, excluding firms 
+              in the food services and accommodation industry (I), across the 13 calendar weeks from 24 to 36. 
+              All regressions also control for area by week fixed effects. Regressors are normalized to have standard deviation equal to 1 for ease of
+              interpretation.."
+  } else { 
+  note <- "Table presents difference-in-difference regression estimates studying the impact of the EOHO scheme on the 
+              MSOA-level online vacancy stocks of local firms with one single trading address on Indeed, across the 13 calendar weeks from 24 to 36. 
+              All regressions also control for area by week fixed effects. Regressors are normalized to have standard deviation equal to 1 for ease of
+              interpretation."
+  }
+  
+  # create latex table: part c
+  c <- etable(mget(paste0("m", seq(13,18))), fitstat = ~  n + meany + msoa + ctrls + clstrs, depvar = FALSE, 
+              tex = TRUE,  extraline = list("__\\midrule \\textbf{Area by Week FE}" = rep(c("NUTS2", "NUTS3", "LAD"),2)), 
+              notes = note)
+  
+  c <- c[which(grepl("Variables",c)):length(c)]
+  c[which(grepl("Variables",c))] <- "\\midrule \\multicolumn{7}{l}{\\textbf{Panel C}: EOHO exposure in levels}\\\\"
+  c[which(grepl("Fit statistics",c))] <- "" # remove unnecessary line
+  
+  # write to file
+  if (restos) {
+    cat(c(a,b,c), file = file.path(tabs, 'eoho_table1_norestos.tex'))
+  } else {
+    cat(c(a,b,c), file = file.path(tabs, 'eoho_table1.tex'))
+  }
+
+  
+  
+} # end restos loop
+
+
+
+
+
+#****************************************************************************************************************************************************
+#### robustness (table 2 in Fetzer) #### 
+
+
+## create additional controls
+
+test[, students := FulltimestudentsInemployment + FulltimestudentsUnemployed + FulltimestudentsEconomicallyin]
+test[, rented := Privaterented + Socialrented]
+
+## estimate OLS models 
+
+depvars <- c("imp_meals", "restaurants_msoa")
+controls <- list("", "*popdensity", "*coviddeathsMarJul",  "*log(1+assets)", "*leverage_assets", "*cash_assets", "*students", c("*rented", "*Owned"))
+
+
+for (j in 1:length(depvars)) {
+  depvar <- depvars[j]
+  for (i in 1:length(controls)) {
+
+    fmla <- as.formula(paste0("log(1+stock) ~ Post*", depvar,  "+ ", paste0("factor(Week)", unlist(controls[1:i]), collapse = "+"), 
+                              "| factor(msoa11cd) + factor(Week) + lad19cd^Week"))
+    m <- fixest::feols(fmla, data = test, cluster = "lad19cd")
+    m$fixef_vars <- NULL
+    assign(paste0("m", i+(j-1)*length(controls)), m)
+  }
+}
+
+
+# paste0("Post*", depvar, controls[1:i], collapse = "+"), "+",  
+
+
+#### To LaTeX and beyond! 
+
+# create latex table: part a
+a <- etable(mget(paste0("m", seq(1,length(controls)))), keep = c("imp_meals", "Post"), fitstat = ~ meany + n + ctrls + clstrs, depvar = FALSE, 
+            tex = TRUE)
+a <- a[1:which(grepl("Clusters",a))]
+a <- gsub("Model", "DV: Log(1+Vacancy Stock)", a)
+a[which(grepl("Variables",a))] <- "\\midrule \\multicolumn{7}{l}{\\textbf{Panel A}: EOHO exposure: meals}\\\\"
+a[which(grepl("Fit statistics",a))] <- "" # remove unnecessary line
+
+
+
+# create latex table: part b
+b <- etable(mget(paste0("m", seq(length(controls)+1,length(controls)*2))), keep = c("restaurants_msoa", "Post"), fitstat = ~ meany + n + ctrols + clstrs, 
+            depvar = FALSE, 
+            tex = TRUE, 
+            extraline = list("__\\midrule \\textbf{Area by Week FE:}" = rep(c("LAD"),length(controls)), 
+                             "__\\textbf{Week $times$ additional control:}" = "", 
+                             "__Population density" = c("", rep("X", length(controls)-1)),
+                             "__Spring 2020 COVID-19 exposure" = c(rep("",2), rep("X", length(controls)-2)),
+                             "__Log(1+assets)" = c(rep("",3), rep("X", length(controls)-3)),
+                             "__Leverage / assets" = c(rep("",4), rep("X", length(controls)-4)),
+                             "__Cash / assets" = c(rep("",5), rep("X", length(controls)-5)),
+                             "__Student exposure" = c(rep("",6), rep("X", length(controls)-6)),
+                             "__Tenure types" = c(rep("",7), rep("X", length(controls)-7))),
+             notes = "Table presents difference-in-difference regression estimates studying the impact of the EOHO scheme on the 
+              MSOA-level online vacancy stocks of local firms with one single trading address on Indeed, across the 13 calendar weeks from 24 to 36. 
+              All regressions in Panel a and b also control for area by week fixed effects. Additional controls are, in order of introduction:
+              \textit{Population density}: number of people per sq. km in MSOA; 
+              \textit{Spring 2020 COVID-19 exposure}: total number of COVID-19 deaths in MSOA between March and July 2020; 
+              \textit{Log(1+assets)}: log of average total assets (th. GBP) of all firms with open vacancies in MSOA on given week; 
+              \textit{Leverage / assets}: asset-weighted average of ratio of current liabilities to total assets of all firms with open vacancies in MSOA on given week; 
+              \textit{Cash / assets}: asset-weighted average of ratio of bank and deposits to total assets of all firms with open vacancies in MSOA on given week; 
+              \textit{Student exposure}: number of full-time students resident in MSOA (2011 Census) -- this variable is not included in the doubly-robust estimation due to estimation issues (no solution);
+              \textit{Tenure types}: share of households living in rented or owned accommodation.
+              Regressors are normalized to have standard deviation equal to 1 for ease of
+              interpretation." #controls <- list("", "*popdensity", "*coviddeathsMarJul",  "*log(1+assets)", "*leverage_emp", "*cash_emp", "*students", c("*rented", "*Owned"))
+            )
+
+e <- b[(which(grepl("Clusters",b))+1):length(b)] # get bottom of table now cause easier to have etable produce it for me 
+
+b <- b[which(grepl("Variables",b)):which(grepl("Clusters",b))]
+b <- gsub("Model", "DV: Log(1+Vacancy Stock)", b)
+b[which(grepl("Variables", b))] <- "\\midrule \\multicolumn{7}{l}{\\textbf{Panel B}: EOHO exposure: restaurants}\\\\"
+b[which(grepl("Fit statistics",b))] <- "" # remove unnecessary line
+
+
+
+## estimate semi-parametric models (Sant'Anna & Callaway)
+
+
+test[, t_col := as.numeric(week)]
+test[, id_col := as.numeric(factor(msoa11cd))]
+test[, g_col := as.numeric(restaurants_msoa > 0) *32 ]
+test[, stock_log := log(1+stock)]
+test[, assets_log := log(1+assets)]
+
+controls <- list("1", "popdensity", "coviddeathsMarJul",  "assets_log", "leverage_assets", "cash_assets", c("rented", "Owned"))
+
+c <- "\\midrule \\multicolumn{7}{l}{\\textbf{Panel C}: EOHO restaurants: doubly-robust}\\\\"
+d <- "\\midrule \\multicolumn{7}{l}{\\textbf{Panel D}: EOHO meals: doubly-robust}\\\\"
+
+for (j in 1:length(depvars)) {
+  
+  depvar <- depvars[j]
+  
+  if (grepl("restaurants", depvar)) {
+    line_ests <- "Post $\\times $ EOHO restaurants &"
+  } else {
+    line_ests <- "Post $\\times $ EOHO covered meals &"
+  }
+  line_ses <- ""
+  
+  for (i in 1:length(controls)) {
+    controls_loop <- unlist(controls[1:i])
+    control_fmla <- as.formula(paste0("~", paste0(controls_loop, collapse = "+")))
+    controls_loop <- controls_loop[controls_loop != "1"]
+    
+    df_did <- na.omit(test[, c("t_col", "id_col", "g_col", "stock_log", "lad19cd", ..controls_loop) ])
+    mdl_dr <- did::att_gt(yname = "stock_log", tname = "t_col", idname = "id_col", 
+                          xformla = control_fmla, 
+                          gname = "g_col", data = df_did, anticipation = 0,  clustervars = "lad19cd",
+                          bstrap = TRUE)
+    aggte_group <- aggte(mdl_dr, type = "group")
+    pval <- 2*pnorm(abs(aggte_group$overall.att / aggte_group$overall.se), lower.tail=FALSE)
+    if (pval < 0.01) {
+      stars <- "***"
+    } else if (pval < 0.05) {
+      stars <- "**"
+    } else if (pval < 0.1) {
+      stars <- "*"
+    } else{
+      stars <- ""
+    }
+    if (i == length(controls)) { # students control violates overlap condition
+      line_ests <- paste0(line_ests, " &")
+      line_ses <- paste0(line_ses, " &")
+    }
+    line_ests <- paste0(line_ests, round(aggte_group$overall.att,4), "^${", stars, "}$ &")
+    line_ses <- paste0(line_ses, "(", round(aggte_group$overall.se,4), ") &")
+  }
+  
+  substr(line_ests, nchar(line_ests), nchar(line_ests)) <- " "
+  line_ests <- paste0(line_ests, "\\\\\n")
+  substr(line_ses, nchar(line_ests), nchar(line_ests)) <- " "
+  line_ses <- paste0(line_ses, "\\\\\n")
+  
+  
+  if (grepl("restaurants", depvar)) {
+    c <- c(c, line_ests, line_ses, a[which(grepl("Mean DV",a)):which(grepl("Mean DV",a))]) # append summary statistics from ols tables cause they're the same and etable does it nicely
+  } else {
+    d <- c(d, line_ests, line_ses, b[which(grepl("Mean DV",b)):which(grepl("Mean DV",b))])
+  }
+  
+}
+
+
+
+
+# write to file
+cat(c(a,b,c,d,e), file = file.path(tabs, 'eoho_table2.tex'))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#****************************************************************************************************************************************************
+#### heterogeneous treatment effects #### 
+
+
+
+depvars <- c("imp_meals", "restaurants_msoa", "imp_meals", "restaurants_msoa")
+
+vars_reg <-  c("leverage_assets", "assets_log", "cash_assets") # dont include credit score cause never sign, but decreases power for coefficients on other variables
+controls_cont <- c(as.list(vars_reg), list(vars_reg))
+vars_reg_dummy <- paste0(vars_reg, "_dummy")
+controls_dummy <- c(as.list(vars_reg_dummy), list(vars_reg_dummy))
+
+
+# factor(Week)*assets_dummy + post*restaurants_msoa_pc:leverage_emp_dummy +
+#   factor(Week)*leverage_emp + post*restaurants_msoa_pc:cash_emp +
+#   factor(Week)*cash_emp
+
+for (i in 1:length(depvars)) { 
+  if (i<=2) {
+    controls <- controls_dummy
+  } else {
+    controls <- controls_cont
+  }
+  count <- 1
+  for (j in controls) { 
+    print(j)
+    depvar <- depvars[i]
+    fmla <- as.formula(paste0("log(1+stock) ~ Post*", depvar, "+  ",
+                              paste0("Post*", depvar,":", j, collapse = "+"), # interacted treatment effects
+                              "+", paste0("factor(Week)*", j, collapse = "+"), # interacted week effects
+                              " | factor(msoa11cd) + factor(Week) + lad19cd^Week "
+                              ))
+    # fmla <- as.formula(paste0("log(1+stock) ~ Post*", depvar, "+  ",
+    #                           paste0("Post*", depvar,":", controls, collapse = "+"), # interacted treatment effects
+    #                           " | factor(msoa11cd) + factor(Week) + lad19cd^Week +",
+    #                           paste0("Week^", controls, collapse = "+")
+    # ))
+    m <- fixest::feols(fmla, data = test, cluster = "lad19cd")
+    m$fixef_vars <- NULL
+    
+    m_num <-  (i-1)*length(controls)+count
+    cat(m_num)
+    assign(paste0("m", m_num), m)
+    
+    count <- count + 1
+  
+  }
+}
+
+# set variable names
+dict["imp_meals"] <- "EOHO meals"  # alter this because table is too long
+fixest::setFixest_dict(c(dict, "assets_log" = "Log(1+assets)",
+                 "leverage_assets" = "Leverage / assets",
+                 "cash_assets" = "Cash / assets", 
+                 "assets_log_dummy1" = "Log(1+assets) (=1)",
+                 "leverage_assets_dummy1" = "Leverage / assets (=1)",
+                 "cash_assets_dummy1" = "Cash / assets (=1)"
+                 ))
+
+# create latex table: dummy interactions
+a <- etable(mget(paste0("m", seq(1,m_num/2))), drop = c(".factor(Week)*"), 
+            fitstat = ~ meany + n + ctrls + clstrs, depvar = FALSE, 
+            tex = TRUE)
+a <- a[1:which(grepl("Clusters",a))]
+a <- gsub("Model", "DV: Log(1+Vacancy Stock)", a)
+a[which(grepl("Variables",a))] <-  "\\midrule \\multicolumn{7}{l}{\\textbf{Panel A}: interactions: dummy variables}\\\\"
+a[which(grepl("Fit statistics",a))] <- "" # remove unnecessary line
+
+
+# create latex table:  continuous interactions
+b <- etable(mget(paste0("m", seq(m_num /2 + 1,m_num))), drop = c(".factor(Week)*"), 
+            fitstat = ~ meany + n + ctrls + clstrs, depvar = FALSE, 
+            tex = TRUE, 
+            extraline = list("__\\midrule \\textbf{Area by Week FE:}" = rep(c("LAD"), m_num/2)), 
+            notes = "Table presents difference-in-difference regression estimates studying the heterogeneous impact of the EOHO scheme on the 
+            MSOA-level online vacancy stocks of local firms with one single trading address on Indeed, across the 13 calendar weeks from 24 to 36. 
+             All regressions include time by covariate fixed effects for those covariates interacted with the DID estimator, which are:
+            \\textit{Log(1+assets)}: log of average total assets (th. GBP) of all firms with open vacancies in MSOA on given week; 
+            \\textit{Leverage / assets}: asset-weighted average of ratio of current liabilities to total assets of all firms with open vacancies in MSOA on given week; 
+            \\textit{Cash / assets}: asset-weighted average of ratio of bank and deposits to total assets of all firms with open vacancies in MSOA on given week.
+            Dummy variables are equal to 1 (=1) if an observation is above the median for the corresponding variable.")
+b <- b[which(grepl("Variables",b)):length(b)]
+b <- gsub("Model", "DV: Log(1+Vacancy Stock)", b)
+b[which(grepl("Variables",b))] <- "\\midrule \\multicolumn{7}{l}{\\textbf{Panel B}: interactions: continuous variables}\\\\"
+b[which(grepl("Fit statistics",b))] <- "" # remove unnecessary line
+
+
+cat(c(a,b), file = file.path(tabs, 'eoho_hetero.tex'))
+
+
+
+
+
+
+
+#****************************************************************************************************************************************************
+# EVENT STUDY
+#****************************************************************************************************************************************************
+
+
+
+
+#### simple event study ####
+
+test[, weekssince_eoho := as.numeric(week) - 32]
+test <- fastDummies::dummy_cols(test, "weekssince_eoho")
+
+
+df_event <- test
+
+
+## restaurants 
+periods <- c(seq(-7,-2), seq(0,4)) 
+fmla <- as.formula(paste0("log(1+stock) ~", paste(paste0("`weekssince_eoho_", periods, "`", ":restaurants_msoa"), collapse = "+"),
+                         "+",  paste0("factor(Week)",c(":popdensity", ":coviddeathsMarJul", ":assets_log", ":cash_assets", ":leverage_assets",
+                                                       ":students", ":rented", ":Owned"), collapse = "+"), 
+                         "| factor(msoa11cd) + factor(Week) + lad19cd^Week")) # + qual4_dummy^Week + owned_dummy^Week +  assets_dummy^Week + cash_dummy^Week + leverage_dummy^Week"))
+m1 <- fixest::feols(fmla, data = df_event, cluster = "lad19cd")
+summary(m1)
+
+periods <- periods + 32
+
+
+p <- coefplot(m1, keep = "weekssince", ci_level = 0.9)
+df_p <- data.table(p$prms)
+df_p$periods <- periods
+p <- ggplot(df_p) + geom_point(aes(x = periods, y = estimate),  color = "black") + 
+  geom_line(aes(x = periods, y = estimate), color = "grey") + 
+  geom_errorbar(aes(x = periods, ymax = ci_high, ymin = ci_low),  color = "black") + xlab("Calendar week") + 
+  geom_hline(aes(yintercept = 0),  color = "black", linetype = "dashed") + 
+  geom_vline(xintercept = 31.5, linetype = "dashed", color = "red", alpha = 0.75) +
+  ylab("Effect and 90 % Conf. Int.") + 
+  scale_x_continuous(breaks = periods) + theme_classic()
+p
+
+ggsave(file.path(figs, 'eventstudy_restaurants.pdf'), width = 7, height = 3)
+
+
+## meals 
+periods <- c(seq(-7,-2), seq(0,4)) 
+fmla <- fmla <- as.formula(paste0("log(1+stock) ~", paste(paste0("`weekssince_eoho_", periods, "`", ":imp_meals"), collapse = "+"),
+                                  "+",  paste0("factor(Week)",c(":popdensity", ":coviddeathsMarJul", ":assets_log", ":cash_assets", ":leverage_assets",
+                                                                ":students", ":rented", ":Owned"), collapse = "+"), 
+                                  "| factor(msoa11cd) + factor(Week) + lad19cd^Week")) # + qual4_dummy^Week + owned_dummy^Week +  assets_dummy^Week + cash_dummy^Week + leverage_dummy^Week"))
+m1 <- fixest::feols(fmla, data = df_event, cluster = "lad19cd")
+summary(m1)
+
+periods <- periods + 32
+
+p <- coefplot(m1, ci_level = 0.9, keep = "weekssince")
+df_p <- data.table(p$prms)
+df_p$periods <- periods
+p <- ggplot(df_p) + geom_point(aes(x = periods, y = estimate),  color = "black") + 
+  geom_line(aes(x = periods, y = estimate), color = "grey") + 
+  geom_errorbar(aes(x = periods, ymax = ci_high, ymin = ci_low),  color = "black") + xlab("Calendar week") + 
+  geom_hline(aes(yintercept = 0),  color = "black", linetype = "dashed") + 
+  geom_vline(xintercept = 31.5, linetype = "dashed", color = "red", alpha = 0.75) +
+  ylab("Effect and 90 % Conf. Int.") + 
+  scale_x_continuous(breaks = periods) + theme_classic()
+p
+
+ggsave(file.path(figs, 'eventstudy_meals.pdf'), width = 7, height = 3)
+
+
+
+
+
+#### santanna and callaway event study #### 
+
+test[, t_col := as.numeric(week)]
+test[, id_col := as.numeric(factor(msoa11cd))]
+test[, g_col := as.numeric(restaurants_msoa > 0) *32 ]
+test[, stock_log := log(1+stock)]
+test[, assets_log := log(1+assets)]
+df_did <- test
+
+controls <- c("popdensity", "coviddeathsMarJul", "assets_log", "leverage_assets", "cash_assets", "rented") # students not included since violates overlap condition
+control_fmla <- as.formula(paste0("~", 
+                                  paste0(controls, 
+                                         collapse = "+")))
+
+## restaurants
+df_did_cond <- na.omit(df_did[, c("t_col", "id_col", "g_col", "stock_log", "assets_log", "lad19cd",  ..controls)])
+mdl_dr <- did::att_gt(yname = "stock_log", tname = "t_col", idname = "id_col", 
+                      xformla = control_fmla, 
+                      gname = "g_col", data = df_did_cond, anticipation = 0,  clustervars = "lad19cd",
+                      bstrap = TRUE, alp = 0.1)
+
+mdl_df <- data.table(estimate = mdl_dr$att, ci_high = mdl_dr$att - mdl_dr$c * mdl_dr$se, ci_low = mdl_dr$att + mdl_dr$c * mdl_dr$se, 
+                     periods = mdl_dr$t)
+p <- ggplot(mdl_df) + geom_point(aes(x = periods, y = estimate),color = "black") + 
+  geom_line(aes(x = periods, y = estimate), color = "grey") + 
+  geom_errorbar(aes(x = periods, ymax = ci_high, ymin = ci_low),  color = "black") + xlab("Calendar week") + 
+  geom_hline(aes(yintercept = 0),  color = "black", linetype = "dashed") + 
+  geom_vline(xintercept = 31.5, linetype = "dashed", color = "red", alpha = 0.75) +
+  ylab("Effect and 90 % Conf. Int.") + 
+  scale_x_continuous(breaks = mdl_dr$t) + theme_classic()
+
+# check <- aggte(mdl_dr, type = "group")
+# summary(check)
+
+ggsave(file.path(figs, 'eventstudy_eoho_dr.pdf'), width = 7, height = 3)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#### rain ####
+
+df_rain <- test[week >= 32]
+
+fmla <- as.formula(paste0("log(1+stock) ~ signoncoreheohorain |  factor(msoa11cd) + factor(Week) + nuts206cd^Week"))
+
+m1 <- fixest::feols(fmla, data = df_rain, cluster = "lad19cd")
+summary(m1)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
