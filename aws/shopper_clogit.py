@@ -13,6 +13,8 @@ figs_dir = "s3://ipsos-dvd/dyn/results/figs/"
 
 
 if __name__ == "__main__":
+    print("Running shopper logit...")
+
     fn_wc = "s3://ipsos-dvd/dyn/data/dwomes_dense_shopper_csv/*"
     
     s3 = boto3.resource('s3')
@@ -55,7 +57,7 @@ if __name__ == "__main__":
             groups = np.array(workers['strata'])
         )
 
-        res = mdl.fit(maxiter=10000, method="lbfgs", disp=True, full_output=True, skip_hessian=True, 
+        res = mdl.fit(maxiter=50000, method="lbfgs", disp=True, full_output=True, skip_hessian=True, 
                       warn_convergence=True)
         
         # file_name = 'clogit_model_', str(prefix) + '.pkl'
@@ -64,7 +66,7 @@ if __name__ == "__main__":
 
         resdf = pd.DataFrame([(res.params[i], exog_names[i]) for i in range(len(exog_names))], columns = ['beta', 'name'])
 
-        resdf.to_csv(data_dyn + "clogit_out_" + str(prefix) + ".csv", index=False)
+        resdf.to_csv(data_dyn + "clogit_out_shopper_" + str(prefix) + ".csv", index=False)
         
         # resdf = pd.read_csv(data_dyn + "clogit_out_" + str(prefix) + ".csv")
         

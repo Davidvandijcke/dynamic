@@ -12,6 +12,7 @@ figs_dir = "s3://ipsos-dvd/dyn/results/figs/"
 
 
 if __name__ == "__main__":
+    print("Running worker logit...")
     # grab csv filename 
     fn_wc = "s3://ipsos-dvd/dyn/data/dwomes_dense_csv/*"
     
@@ -57,7 +58,7 @@ if __name__ == "__main__":
             groups = np.array(workers['strata'])
         )
 
-        res = mdl.fit(maxiter=10000, method="lbfgs", disp=True, full_output=True, skip_hessian=True, 
+        res = mdl.fit(maxiter=50000, method="lbfgs", disp=True, full_output=True, skip_hessian=True, 
                       warn_convergence=True)
         
         # file_name = 'clogit_model_', str(prefix) + '.pkl'
