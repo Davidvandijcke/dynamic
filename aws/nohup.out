@@ -106,3 +106,38 @@ KeyboardInterrupt
   d = c * h * ex[t - 1, :]
 /home/ubuntu/miniconda/envs/fdr/lib/python3.9/site-packages/statsmodels/discrete/conditional_models.py:319: RuntimeWarning: invalid value encountered in scalar multiply
   u, v = a + c * h, b + d + e * h
+Traceback (most recent call last):
+  File "/home/ubuntu/miniconda/envs/fdr/lib/python3.9/site-packages/pandas/io/parsers/c_parser_wrapper.py", line 234, in read
+    chunks = self._reader.read_low_memory(nrows)
+  File "parsers.pyx", line 838, in pandas._libs.parsers.TextReader.read_low_memory
+  File "parsers.pyx", line 905, in pandas._libs.parsers.TextReader._read_rows
+  File "parsers.pyx", line 874, in pandas._libs.parsers.TextReader._tokenize_rows
+  File "parsers.pyx", line 891, in pandas._libs.parsers.TextReader._check_tokenize_status
+  File "parsers.pyx", line 2053, in pandas._libs.parsers.raise_parser_error
+  File "/home/ubuntu/miniconda/envs/fdr/lib/python3.9/site-packages/s3fs/core.py", line 2300, in _fetch_range
+    return _fetch_range(
+  File "/home/ubuntu/miniconda/envs/fdr/lib/python3.9/site-packages/s3fs/core.py", line 2462, in _fetch_range
+    return sync(fs.loop, _inner_fetch, fs, bucket, key, version_id, start, end, req_kw)
+  File "/home/ubuntu/miniconda/envs/fdr/lib/python3.9/site-packages/fsspec/asyn.py", line 91, in sync
+    if event.wait(1):
+  File "/home/ubuntu/miniconda/envs/fdr/lib/python3.9/threading.py", line 581, in wait
+    signaled = self._cond.wait(timeout)
+  File "/home/ubuntu/miniconda/envs/fdr/lib/python3.9/threading.py", line 316, in wait
+    gotit = waiter.acquire(True, timeout)
+KeyboardInterrupt
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/ubuntu/dynamic/aws/shopper_clogit.py", line 26, in <module>
+    workers= pd.read_csv(fn, usecols =[i for i in cols if i != "open_hours"], 
+  File "/home/ubuntu/miniconda/envs/fdr/lib/python3.9/site-packages/pandas/io/parsers/readers.py", line 1026, in read_csv
+    return _read(filepath_or_buffer, kwds)
+  File "/home/ubuntu/miniconda/envs/fdr/lib/python3.9/site-packages/pandas/io/parsers/readers.py", line 626, in _read
+    return parser.read(nrows)
+  File "/home/ubuntu/miniconda/envs/fdr/lib/python3.9/site-packages/pandas/io/parsers/readers.py", line 1923, in read
+    ) = self._engine.read(  # type: ignore[attr-defined]
+  File "/home/ubuntu/miniconda/envs/fdr/lib/python3.9/site-packages/pandas/io/parsers/c_parser_wrapper.py", line 234, in read
+    chunks = self._reader.read_low_memory(nrows)
+KeyboardInterrupt
+python: can't open file '/home/ubuntu/dynamic/aws/worker_clog': [Errno 2] No such file or directory

@@ -6,24 +6,22 @@ import statsmodels as sm
 import matplotlib.pyplot as plt
 import pickle
 import boto3
+from glob import glob
 
 data_dyn = "s3://ipsos-dvd/dyn/data/"
 figs_dir = "s3://ipsos-dvd/dyn/results/figs/"
 
 
 if __name__ == "__main__":
-    # grab csv filename 
-    fn_wc = "s3://ipsos-dvd/dyn/data/dwomes_dense_csv/*"
+    fn_wc = "s3://ipsos-dvd/dyn/data/dwomes_dense_shopper_csv/*"
     
     s3 = boto3.resource('s3')
     my_bucket = s3.Bucket('ipsos-dvd')
 
-    for object_summary in my_bucket.objects.filter(Prefix="dyn/data/dwomes_dense_csv/"):
+    for object_summary in my_bucket.objects.filter(Prefix="dyn/data/dwomes_dense_shopper_csv/"):
         temp = object_summary.key
         if ".csv" in temp:
             fn = "s3://ipsos-dvd/" + temp
-            
-    # read data
     cols = list(pd.read_csv(fn,  on_bad_lines='skip', header=0, sep="\t", nrows=1))
     workers= pd.read_csv(fn, usecols =[i for i in cols if i != "open_hours"], 
                          on_bad_lines='skip', header=0, sep="\t")
@@ -49,7 +47,7 @@ if __name__ == "__main__":
         else:
             exog_names = [x for x in allcols if "salary" in x or "chainweek_" in x]
         exog_names = exog_names + ['distance', 'distance_sq']
-        endog_names = 'pr_work'
+        endog_names = 'pr_shop'
 
         mdl = ConditionalLogit( # **kwargs are for LikelihoodModel Class
             endog = np.array(workers[endog_names]),
@@ -68,7 +66,7 @@ if __name__ == "__main__":
 
         resdf.to_csv(data_dyn + "clogit_out_" + str(prefix) + ".csv", index=False)
         
-        resdf = pd.read_csv(data_dyn + "clogit_out_" + str(prefix) + ".csv")
+        # resdf = pd.read_csv(data_dyn + "clogit_out_" + str(prefix) + ".csv")
         
         # s3 = boto3.client('s3')
         # with open(file_name, "rb") as f:
